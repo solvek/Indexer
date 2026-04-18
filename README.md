@@ -75,7 +75,7 @@ python indexer.py volyn /mnt/scans --files "Архів/**"
 python indexer.py volyn https://drive.google.com/drive/folders/FOLDER_ID
 
 # Ліміт (за замовч. вже оброблені пропускаються; для перезапису додайте --rewrite)
-python indexer.py volyn /home/solvek/Projects/VolynRagz/scans/122484190 --limit 2 --description volyn_darts_marriages
+python python indexer.py lutskyi_rayon /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --description volyn_darts_marriages --model gemini-3-flash-preview
 
 # З описом контексту для моделі
 python indexer.py volyn /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
