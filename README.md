@@ -90,7 +90,7 @@ python indexer.py /mnt/scans --verbose
 |---|---|---|---|
 | `source` | positional | — | Локальний шлях або Google Drive URL |
 | `--files` | optional | всі рекурсивно | Фільтр файлів (див. нижче) |
-| `--limit` | optional | без ліміту | Максимальна кількість файлів |
+| `--limit` | optional | без ліміту | Максимум спроб обробки; файли, що лише пропускаються (вже в БД при `--no-rewrite`), у ліміт не входять |
 | `--rewrite` / `--no-rewrite` | optional | `--rewrite` | Перезаписувати вже оброблені |
 | `--description` | optional | — | Додатковий контекст для моделі |
 | `--model` | optional | з `.env` | Назва моделі Gemini |

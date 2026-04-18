@@ -60,7 +60,7 @@ def main():
   # Підпапка рекурсивно
   python indexer.py /mnt/scans --files "Архів/**"
 
-  # Google Drive, ліміт 10, не перезаписувати вже оброблені
+  # Google Drive: обробити до 10 нових файлів (уже в БД не входять у ліміт)
   python indexer.py https://drive.google.com/drive/folders/ID --limit 10 --no-rewrite
 
   # З описом документів для моделі
@@ -78,7 +78,7 @@ def main():
     )
     parser.add_argument(
         "--limit", type=int, default=None,
-        help="Не більше N файлів з черги (порядок після сортування); діє і з --no-rewrite",
+        help="Не більше N спроб обробки (файли, що пропускаються як вже в БД, не рахуються)",
     )
     parser.add_argument(
         "--rewrite", action=argparse.BooleanOptionalAction, default=True,
@@ -137,28 +137,40 @@ def main():
         sys.exit(1)
 
     total_found = len(entries)
-    if args.limit is not None:
-        entries = entries[: args.limit]
-    in_queue = len(entries)
     log.info(
         f"Знайдено файлів: {total_found}"
-        + (f", у черзі цього запуску: {in_queue}" if args.limit is not None else "")
+        + (
+            f", ліміт обробки цього запуску: {args.limit} (пропуски «вже в БД» не рахуються)"
+            if args.limit is not None
+            else ""
+        )
     )
 
-    if in_queue == 0:
+    if total_found == 0:
         log.warning("Немає файлів для обробки.")
         return
 
     processed = skipped = errors = 0
+    work_num = 0  # скільки файлів реально пішли в обробку (не пропуск)
 
     for i, entry in enumerate(entries, 1):
-        label = f"[{i}/{in_queue}] {entry.folder + '/' if entry.folder else ''}{entry.file}"
+        rel = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
 
         already_done = db.is_processed(entry.folder, entry.file)
         if already_done and not args.rewrite:
-            log.info(f"ПРОПУСК (вже оброблено): {label}")
+            log.info(f"ПРОПУСК (вже оброблено): [{i}/{total_found}] {rel}")
             skipped += 1
             continue
+
+        if args.limit is not None and work_num >= args.limit:
+            break
+
+        work_num += 1
+        label = (
+            f"[{work_num}/{args.limit}] {rel}"
+            if args.limit is not None
+            else f"[{i}/{total_found}] {rel}"
+        )
 
         if already_done and args.rewrite:
             db.delete_scan(entry.folder, entry.file)
