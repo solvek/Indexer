@@ -23,7 +23,48 @@ FOLDER_MIME = "application/vnd.google-apps.folder"
 _log = logging.getLogger(__name__)
 
 
-def _forbidden_media_message(file_label: str, is_oauth: bool) -> str:
+def _parse_drive_error_body(resp: requests.Response) -> str:
+    """Короткий опис помилки Google (квота vs права) без логіну ключа в тексті."""
+    try:
+        j = resp.json()
+        err = j.get("error", j) if isinstance(j, dict) else {}
+        if not isinstance(err, dict):
+            return str(err)[:400]
+        out = [err.get("message", "")]
+        for e in err.get("errors", []) or []:
+            if isinstance(e, dict):
+                out.append(" ".join(filter(None, [e.get("reason"), e.get("message")])))
+        return " ".join(s for s in out if s).strip()[:500]
+    except Exception:
+        t = (getattr(resp, "text", None) or "")[:300]
+        return t.strip()
+
+
+def _looks_like_quota_or_rate_limit(detail: str) -> bool:
+    d = detail.lower()
+    return any(
+        x in d
+        for x in (
+            "quota",
+            "rate",
+            "usage",
+            "limit",
+            "ratelimitexceeded",
+            "usaglimit",
+        )
+    )
+
+
+def _forbidden_media_message(
+    file_label: str, is_oauth: bool, drive_detail: str = ""
+) -> str:
+    if _looks_like_quota_or_rate_limit(drive_detail):
+        return (
+            f"403 на {file_label}: схоже на ліміт/квоту API (текст від Google: {drive_detail[:300]}). "
+            "RPS-ліміти зазвичай дають 429, а не 403, але в Drive інколи квоту пишуть і в 403. "
+            "Перевірте: Cloud Console → APIs & Services → Google Drive API → Quotas, "
+            "а також денні ліміти/білінг. Можна зменшити обсяг (--request-delay) або пізніше повторити."
+        )
     if is_oauth:
         return (
             f"403 заборона завантаження: {file_label} — акаунт з OAuth, ймовірно, "
@@ -160,6 +201,27 @@ class DriveSource(Source):
             entries.append(FileEntry(folder=r["folder"], file=r["name"], _drive_id=r["id"]))
         return sorted(entries, key=lambda e: (e.folder, e.file))
 
+    def _open_drive_media(
+        self, file_id: str, acknowledge_abuse: bool
+    ) -> requests.Response:
+        """Stream GET .../files/{id}?alt=media (так само, як клієнт Drive API)."""
+        base = f"https://www.googleapis.com/drive/v3/files/{file_id}"
+        params: Dict[str, str] = {"alt": "media"}
+        if acknowledge_abuse:
+            params["acknowledgeAbuse"] = "true"
+        if self._creds:
+            self._ensure_valid_oauth_creds()
+            assert self._creds is not None
+            return requests.get(
+                base,
+                params=params,
+                headers={"Authorization": f"Bearer {self._creds.token}"},
+                stream=True,
+                timeout=120,
+            )
+        params["key"] = self._api_key
+        return requests.get(base, params=params, stream=True, timeout=120)
+
     def get_local_path(self, entry: FileEntry) -> str:
         """Завантажує файл у тимчасову директорію і повертає шлях."""
         file_id = self._id_map.get((entry.folder, entry.file)) or entry._drive_id
@@ -169,28 +231,35 @@ class DriveSource(Source):
         suffix = Path(entry.file).suffix
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         tmp.close()
-
-        if self._creds:
-            self._ensure_valid_oauth_creds()
-            assert self._creds is not None
-            url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
-            resp = requests.get(
-                url,
-                headers={"Authorization": f"Bearer {self._creds.token}"},
-                stream=True,
-                timeout=60,
-            )
-        else:
-            url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&key={self._api_key}"
-            resp = requests.get(url, stream=True, timeout=60)
-
-        resp.raise_for_status()
-        with open(tmp.name, "wb") as f:
-            for chunk in resp.iter_content(chunk_size=1 << 20):
-                f.write(chunk)
-
-        entry._local_path = tmp.name
-        return tmp.name
+        is_oauth = self._creds is not None
+        label = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
+        try:
+            for use_ack in (False, True):
+                resp = self._open_drive_media(file_id, acknowledge_abuse=use_ack)
+                if resp.status_code == 200:
+                    with open(tmp.name, "wb") as f:
+                        for chunk in resp.iter_content(chunk_size=1 << 20):
+                            f.write(chunk)
+                    entry._local_path = tmp.name
+                    return tmp.name
+                if resp.status_code == 403 and not use_ack:
+                    _log.info(
+                        "alt=media повернув 403, повтор з acknowledgeAbuse=true (правила Google для частини файлів)"
+                    )
+                    continue
+                if resp.status_code == 403:
+                    detail = _parse_drive_error_body(resp)
+                    if detail:
+                        _log.warning("Drive API (тіло помилки alt=media): %s", detail)
+                    raise RuntimeError(_forbidden_media_message(label, is_oauth, detail))
+                resp.raise_for_status()
+        except Exception:
+            if os.path.exists(tmp.name):
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+            raise
 
     def cleanup(self, entry: FileEntry):
         """Видаляє тимчасовий файл після обробки."""
