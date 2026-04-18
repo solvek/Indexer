@@ -4,6 +4,7 @@
 import errno
 import json
 import logging
+import random
 import re
 import socket
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 
@@ -87,10 +89,12 @@ _client: Optional[genai.Client] = None
 
 _log = logging.getLogger(__name__)
 
-# google-genai за замовч. не повторює збої DNS/з'єднання (лише HTTP-коди відповіді)
-_GEMINI_TRANSPORT_ATTEMPTS = 5
-_GEMINI_TRANSPORT_BASE_DELAY_S = 1.0
-_GEMINI_TRANSPORT_MAX_DELAY_S = 30.0
+# Повтори при тимчасових збоях мережі та при перевантаженні / лімітах API (503, 429…)
+_GEMINI_RETRY_MAX_ATTEMPTS = 8
+_GEMINI_RETRY_BASE_DELAY_S = 2.0
+_GEMINI_RETRY_MAX_DELAY_S = 90.0
+# HTTP-коди, за яких має сенс повторити запит (не 4xx крім 408/429)
+_GEMINI_RETRY_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 
 
 def _walk_exceptions(exc: BaseException):
@@ -164,6 +168,45 @@ def _is_transient_transport_error(exc: BaseException) -> bool:
     return False
 
 
+def _http_status_from_exception(exc: BaseException) -> Optional[int]:
+    """Код відповіді API, якщо помилка з HTTP-шару або google.genai.errors.APIError."""
+    for e in _walk_exceptions(exc):
+        if isinstance(e, genai_errors.APIError):
+            code = getattr(e, "code", None)
+            if isinstance(code, int):
+                return code
+        try:
+            import httpx
+        except ImportError:
+            pass
+        else:
+            if isinstance(e, httpx.HTTPStatusError):
+                return e.response.status_code
+    return None
+
+
+def _retry_after_seconds(exc: BaseException) -> Optional[float]:
+    """Заголовок Retry-After (секунди), якщо є."""
+    for e in _walk_exceptions(exc):
+        if isinstance(e, genai_errors.APIError):
+            resp = getattr(e, "response", None)
+            if resp is not None and hasattr(resp, "headers"):
+                ra = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
+                if ra is not None:
+                    try:
+                        return float(ra)
+                    except ValueError:
+                        pass
+    return None
+
+
+def _is_retryable_gemini_error(exc: BaseException) -> bool:
+    if _is_transient_transport_error(exc):
+        return True
+    status = _http_status_from_exception(exc)
+    return status is not None and status in _GEMINI_RETRY_HTTP_STATUSES
+
+
 def init_client(api_key: str):
     global _client
     _client = genai.Client(api_key=api_key)
@@ -198,7 +241,7 @@ def process_image(
     )
 
     last_exc: Optional[BaseException] = None
-    for attempt in range(1, _GEMINI_TRANSPORT_ATTEMPTS + 1):
+    for attempt in range(1, _GEMINI_RETRY_MAX_ATTEMPTS + 1):
         try:
             response = _client.models.generate_content(
                 model=model_name,
@@ -208,18 +251,28 @@ def process_image(
             return _parse_response(response.text)
         except Exception as e:
             last_exc = e
-            if attempt >= _GEMINI_TRANSPORT_ATTEMPTS or not _is_transient_transport_error(
-                e
-            ):
+            if attempt >= _GEMINI_RETRY_MAX_ATTEMPTS or not _is_retryable_gemini_error(e):
                 break
             delay = min(
-                _GEMINI_TRANSPORT_BASE_DELAY_S * (2 ** (attempt - 1)),
-                _GEMINI_TRANSPORT_MAX_DELAY_S,
+                _GEMINI_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)),
+                _GEMINI_RETRY_MAX_DELAY_S,
+            )
+            ra = _retry_after_seconds(e)
+            if ra is not None:
+                delay = max(delay, min(ra, _GEMINI_RETRY_MAX_DELAY_S))
+            # невеликий джиттер, щоб одночасні клієнти не били в API одним фронтом
+            delay *= 1.0 + random.uniform(0.0, 0.12)
+            status = _http_status_from_exception(e)
+            kind = (
+                f"HTTP {status}"
+                if status is not None
+                else "мережа"
             )
             _log.warning(
-                "Тимчасова помилка мережі до Gemini (%s/%s): %s — повтор через %.1f с",
+                "Тимчасова помилка Gemini (%s, спроба %s/%s): %s — повтор через %.1f с",
+                kind,
                 attempt,
-                _GEMINI_TRANSPORT_ATTEMPTS,
+                _GEMINI_RETRY_MAX_ATTEMPTS,
                 e,
                 delay,
             )

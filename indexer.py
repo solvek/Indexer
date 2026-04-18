@@ -10,6 +10,7 @@ import argparse
 import logging
 import os
 import sys
+import time
 
 from dotenv import load_dotenv
 
@@ -106,8 +107,20 @@ def main():
         "--verbose", action="store_true",
         help="Детальні логи (debug рівень)",
     )
+    parser.add_argument(
+        "--request-delay",
+        type=float,
+        default=0.0,
+        metavar="SEC",
+        help=(
+            "Пауза після кожного звернення до моделі (секунд). Знижує ризик 429/503 "
+            "при серії сканів; 0 = без паузи (default: 0)"
+        ),
+    )
 
     args = parser.parse_args()
+    if args.request_delay < 0:
+        parser.error("--request-delay має бути >= 0")
     setup_logging(args.verbose)
     log = logging.getLogger("indexer")
 
@@ -134,6 +147,8 @@ def main():
     log.info(f"Джерело: {args.source}")
     log.info(f"Фільтр файлів: {args.files or '(всі рекурсивно)'}")
     log.info(f"Модель: {args.model}, температура: {args.temperature}")
+    if args.request_delay > 0:
+        log.info(f"Пауза між запитами: {args.request_delay} с")
 
     # Список файлів
     try:
@@ -212,6 +227,9 @@ def main():
         finally:
             if local_path:
                 source.cleanup(entry)
+
+        if args.request_delay > 0:
+            time.sleep(args.request_delay)
 
     log.info(
         f"\n{'='*50}\n"
