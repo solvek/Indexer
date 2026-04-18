@@ -1,13 +1,24 @@
-from typing import Optional
 """
 Обробка зображень через Gemini: витягування інформації про людей.
 """
 import json
 import re
 from pathlib import Path
+from typing import Optional
 
 from google import genai
 from google.genai import types
+
+
+_PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "document_extraction.txt"
+_prompt_template_cache: Optional[str] = None
+
+
+def _load_prompt_template() -> str:
+    global _prompt_template_cache
+    if _prompt_template_cache is None:
+        _prompt_template_cache = _PROMPT_FILE.read_text(encoding="utf-8")
+    return _prompt_template_cache
 
 
 # ------------------------------------------------------------------ #
@@ -29,43 +40,13 @@ def extract_number(filename: str) -> Optional[int]:
 
 
 # ------------------------------------------------------------------ #
-#  Промпт для моделі                                                   #
+#  Промпт для моделі (текст у prompts/document_extraction.txt)        #
 # ------------------------------------------------------------------ #
-
-_BASE_PROMPT = """\
-Ти аналізуєш скан історичного архівного документу з генеалогічною інформацією.
-Документ може бути метрикою, актом, списком або іншим архівним записом.
-{extra}
-
-Знайди ВСІХ людей, згаданих у документі, та поверни JSON-масив об'єктів.
-
-Кожен об'єкт повинен містити такі поля:
-  "surname"  — прізвище, адаптоване до сучасної УКРАЇНСЬКОЇ мови (найважливіше!)
-  "name"     — ім'я, адаптоване до сучасної української мови
-  "father"   — ім'я батька: витягується з по батькові або контексту.
-               Приклади перетворення: "Іванович" → "Іван", "Петрівна" → "Петро".
-               Якщо невідомо — null.
-  "yob"      — рік народження як ціле число, або null
-  "location" — місцевість, адаптована до сучасної української мови, або null
-
-Правила:
-  • Прізвища розпізнавати максимально точно — це головне завдання
-  • Усі значення адаптувати до сучасної української мови
-  • Дані знаходити з контексту максимально ширше
-  • Якщо поле невідоме — null, не вигадувати
-  • Повернути ТІЛЬКИ валідний JSON-масив, без жодних пояснень чи markdown
-
-Приклад відповіді:
-[
-  {{"surname": "Коваленко", "name": "Іван", "father": "Петро", "yob": 1854, "location": "Київ"}},
-  {{"surname": "Бондаренко", "name": "Марія", "father": null, "yob": null, "location": "Полтава"}}
-]
-"""
 
 
 def _build_prompt(description: Optional[str]) -> str:
     extra = f"\nДодатковий контекст: {description}" if description else ""
-    return _BASE_PROMPT.format(extra=extra)
+    return _load_prompt_template().format(extra=extra)
 
 
 # ------------------------------------------------------------------ #
