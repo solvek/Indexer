@@ -157,6 +157,7 @@ def main():
     processor.init_client(gemini_key)
 
     drive_key = os.environ.get("GOOGLE_DRIVE_API_KEY", "").strip() or None
+    drive_sa = os.environ.get("GOOGLE_DRIVE_SERVICE_ACCOUNT", "").strip() or None
     drive_oauth_secrets = os.environ.get("GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS", "").strip() or None
     drive_oauth_token = os.environ.get("GOOGLE_DRIVE_OAUTH_TOKEN", "").strip() or None
     if drive_oauth_secrets and not drive_oauth_token:
@@ -174,6 +175,7 @@ def main():
             drive_key,
             drive_oauth_secrets,
             drive_oauth_token,
+            drive_sa,
         )
     except ValueError as e:
         log.error(f"Помилка джерела: {e}")

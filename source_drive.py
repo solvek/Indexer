@@ -1,15 +1,16 @@
 """
-Джерело файлів: Google Drive (API key для публічних папок або OAuth2, якщо key блокують).
+Джерело файлів: Google Drive: API key, OAuth (з браузером) або service account (сервер без браузера).
 """
 import logging
 import os
 import re
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 from google.auth.transport.requests import Request
+from google.oauth2 import service_account
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -56,7 +57,7 @@ def _looks_like_quota_or_rate_limit(detail: str) -> bool:
 
 
 def _forbidden_media_message(
-    file_label: str, is_oauth: bool, drive_detail: str = ""
+    file_label: str, auth_mode: str, drive_detail: str = ""
 ) -> str:
     if _looks_like_quota_or_rate_limit(drive_detail):
         return (
@@ -65,7 +66,13 @@ def _forbidden_media_message(
             "Перевірте: Cloud Console → APIs & Services → Google Drive API → Quotas, "
             "а також денні ліміти/білінг. Можна зменшити обсяг (--request-delay) або пізніше повторити."
         )
-    if is_oauth:
+    if auth_mode == "service_account":
+        return (
+            f"403 заборона завантаження: {file_label} — service account не має доступу до цього файла. "
+            "У веб-інтерфейсі Google Drive: правий клік на папку → «Спільний доступ» — додайте "
+            "e-mail сервісного акаунта (у JSON ключа: client_email) з роллю «Переглядач»."
+        )
+    if auth_mode == "user_oauth":
         return (
             f"403 заборона завантаження: {file_label} — акаунт з OAuth, ймовірно, "
             "не має права на цей файл, або власник вимкнув завантаження."
@@ -125,6 +132,12 @@ def _load_oauth_credentials(client_secrets_path: str, token_path: str) -> Creden
     return creds
 
 
+def _load_service_account_creds(key_path: str) -> service_account.Credentials:
+    return service_account.Credentials.from_service_account_file(
+        key_path, scopes=OAUTH_SCOPES
+    )
+
+
 class DriveSource(Source):
     def __init__(
         self,
@@ -132,17 +145,33 @@ class DriveSource(Source):
         api_key: Optional[str] = None,
         oauth_client_secrets: Optional[str] = None,
         oauth_token_path: Optional[str] = None,
+        service_account_path: Optional[str] = None,
     ):
         self.root_folder_id = extract_folder_id(url)
-        self._creds: Optional[Credentials] = None
+        self._creds: Optional[Any] = None
         self._api_key: Optional[str] = None
         self._oauth_token_path: Optional[str] = None
+        self._auth_mode: str = "api_key"
         # (folder, file) → drive file id
         self._id_map: Dict[Tuple[str, str], str] = {}
         # Ім'я кореневої папки за URL (для файлів безпосередньо в корені списку)
         self._root_label: str = ""
 
-        if oauth_client_secrets:
+        if service_account_path:
+            if not os.path.isfile(service_account_path):
+                raise ValueError(
+                    f"GOOGLE_DRIVE_SERVICE_ACCOUNT: файл ключа не знайдено: {service_account_path}"
+                )
+            sa = _load_service_account_creds(service_account_path)
+            self._creds = sa
+            self._auth_mode = "service_account"
+            self.service = build("drive", "v3", credentials=sa, cache_discovery=False)
+            _log.info(
+                "Google Drive: service account (браузер не потрібен). "
+                "Додайте в Drive «Спільний доступ» e-mail: %s",
+                sa.service_account_email,
+            )
+        elif oauth_client_secrets:
             if not os.path.isfile(oauth_client_secrets):
                 raise ValueError(
                     f"GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS: файл не знайдено: {oauth_client_secrets}"
@@ -157,38 +186,42 @@ class DriveSource(Source):
             )
             self._oauth_token_path = oauth_token_path
             self._creds = _load_oauth_credentials(oauth_client_secrets, oauth_token_path)
+            self._auth_mode = "user_oauth"
             self.service = build("drive", "v3", credentials=self._creds, cache_discovery=False)
         elif api_key:
             self._api_key = api_key
             self.service = build("drive", "v3", developerKey=api_key, cache_discovery=False)
             _log.info(
-                "Google Drive: аутентифікація — тільки API key. "
-                "Помилка 403 «method … blocked» зникає, якщо в .env додати "
-                "GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS=шлях/до/JSON (OAuth client, тип Desktop) "
-                "і за потреби GOOGLE_DRIVE_OAUTH_TOKEN"
+                "Google Drive: тільки API key. "
+                "На Oracle/сервер без браузера: GOOGLE_DRIVE_SERVICE_ACCOUNT=шлях/до/SA.json"
             )
         else:
             raise ValueError(
-                "Для Google Drive задайте в .env: GOOGLE_DRIVE_API_KEY (публічна папка) "
-                "або GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS (файл OAuth client secret JSON) "
-                "коли API key у Google Cloud блокують методи Get/List. "
-                "Опційно: GOOGLE_DRIVE_OAUTH_TOKEN — шлях збереження токена (data/drive_oauth_token.json)."
+                "Для Google Drive: GOOGLE_DRIVE_SERVICE_ACCOUNT (сервер/Oracle, без браузера), "
+                "або GOOGLE_DRIVE_API_KEY, або GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS+GOOGLE_DRIVE_OAUTH_TOKEN."
             )
 
     # ------------------------------------------------------------------ #
     #  Public interface                                                  #
     # ------------------------------------------------------------------ #
 
-    def _ensure_valid_oauth_creds(self) -> None:
-        if not self._creds or not self._oauth_token_path:
+    def _ensure_valid_creds(self) -> None:
+        if not self._creds:
             return
         if self._creds.valid:
             return
-        if self._creds.expired and self._creds.refresh_token:
+        if self._auth_mode == "service_account":
+            self._creds.refresh(Request())
+            return
+        if not self._oauth_token_path:
+            return
+        if self._creds.expired and getattr(self._creds, "refresh_token", None):
             self._creds.refresh(Request())
             _save_oauth_token(self._creds, self._oauth_token_path)
         if not self._creds.valid:
-            raise RuntimeError("OAuth2: не вдалось оновити access token, видаліть token-файл і авторизуйтесь знову")
+            raise RuntimeError(
+                "OAuth2: не вдалось оновити access token, видаліть token-файл і авторизуйтесь знову"
+            )
 
     def list_files(self, files_filter: Optional[str]) -> List[FileEntry]:
         self._id_map.clear()
@@ -210,7 +243,7 @@ class DriveSource(Source):
         if acknowledge_abuse:
             params["acknowledgeAbuse"] = "true"
         if self._creds:
-            self._ensure_valid_oauth_creds()
+            self._ensure_valid_creds()
             assert self._creds is not None
             return requests.get(
                 base,
@@ -231,7 +264,6 @@ class DriveSource(Source):
         suffix = Path(entry.file).suffix
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         tmp.close()
-        is_oauth = self._creds is not None
         label = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
         try:
             for use_ack in (False, True):
@@ -251,7 +283,7 @@ class DriveSource(Source):
                     detail = _parse_drive_error_body(resp)
                     if detail:
                         _log.warning("Drive API (тіло помилки alt=media): %s", detail)
-                    raise RuntimeError(_forbidden_media_message(label, is_oauth, detail))
+                    raise RuntimeError(_forbidden_media_message(label, self._auth_mode, detail))
                 resp.raise_for_status()
         except Exception:
             if os.path.exists(tmp.name):
@@ -311,13 +343,9 @@ class DriveSource(Source):
                 if _is_drive_method_blocked_403(e) and not self._creds:
                     raise RuntimeError(
                         "Google Drive повернув 403: методи files.list / files.get заборонені "
-                        "для вашого GOOGLE_DRIVE_API_KEY (таке буває через обмеження ключа в Google Cloud). "
-                        "Варіанти: 1) APIs & Services → Credentials → API key: "
-                        "зніміть зайві API restrictions або дозвольте «Google Drive API» повністю; "
-                        "2) налаштуйте OAuth: знайдіть «OAuth client ID» (Тип: Desktop) у "
-                        "тому ж проєкті, збережіть JSON, у .env "
-                        "GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS=шлях/до/файлу.json "
-                        "і запустіть знову (відкриється браузер, один раз)."
+                        "для вашого GOOGLE_DRIVE_API_KEY. Варіанти: 1) у Cloud Console виправити API restrictions "
+                        "ключа; 2) додати GOOGLE_DRIVE_SERVICE_ACCOUNT=шлях/до/JSON service account; "
+                        "3) додати GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS=… (запуск з браузером один раз)."
                     ) from e
                 raise
             results.extend(resp.get("files", []))

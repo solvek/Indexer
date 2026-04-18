@@ -46,6 +46,7 @@ def create_source(
     drive_api_key: Optional[str] = None,
     drive_oauth_client_secrets: Optional[str] = None,
     drive_oauth_token_path: Optional[str] = None,
+    drive_service_account: Optional[str] = None,
 ) -> Source:
     """Фабрика: визначає тип джерела за рядком."""
     if source_str.startswith("http://") or source_str.startswith("https://"):
@@ -55,6 +56,7 @@ def create_source(
             drive_api_key,
             drive_oauth_client_secrets,
             drive_oauth_token_path,
+            drive_service_account,
         )
     else:
         from source_local import LocalSource
