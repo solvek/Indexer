@@ -157,6 +157,10 @@ def main():
     processor.init_client(gemini_key)
 
     drive_key = os.environ.get("GOOGLE_DRIVE_API_KEY", "").strip() or None
+    drive_oauth_secrets = os.environ.get("GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS", "").strip() or None
+    drive_oauth_token = os.environ.get("GOOGLE_DRIVE_OAUTH_TOKEN", "").strip() or None
+    if drive_oauth_secrets and not drive_oauth_token:
+        drive_oauth_token = "data/drive_oauth_token.json"
 
     # Ініціалізація бази
     db.set_database(args.dbname)
@@ -165,7 +169,12 @@ def main():
 
     # Джерело файлів
     try:
-        source = create_source(args.source, drive_key)
+        source = create_source(
+            args.source,
+            drive_key,
+            drive_oauth_secrets,
+            drive_oauth_token,
+        )
     except ValueError as e:
         log.error(f"Помилка джерела: {e}")
         sys.exit(1)
@@ -179,7 +188,7 @@ def main():
     # Список файлів
     try:
         entries = source.list_files(args.files)
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
         log.error(f"Не вдалось отримати список файлів: {e}")
         sys.exit(1)
 

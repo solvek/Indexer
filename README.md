@@ -42,7 +42,9 @@ cp sample.env .env
 | Змінна | Де взяти |
 |---|---|
 | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| `GOOGLE_DRIVE_API_KEY` | [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials → Create API key (потрібно увімкнути Google Drive API). Потрібен тільки для Google Drive. |
+| `GOOGLE_DRIVE_API_KEY` | [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials → API key. Увімкніть Google Drive API. Для публічних папок. |
+| `GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS` | (опційно) Абсолютний шлях до JSON **Desktop** OAuth client, якщо API key у проєкті блокують методи `files.get` / `files.list` (403 *method … blocked*). Перший запуск відкриє вхід Google у браузері. |
+| `GOOGLE_DRIVE_OAUTH_TOKEN` | (опційно) Файл збереження access token, напр. `data/drive_oauth_token.json` (створюється автоматично; не комітайте). |
 | `DEFAULT_MODEL` | Модель за замовчуванням, можна не міняти |
 
 ## Використання
@@ -56,6 +58,13 @@ python indexer.py DBNAME SOURCE [опції]
 ### Приклади
 
 ```bash
+# Ліміт (за замовч. вже оброблені пропускаються; для перезапису додайте --rewrite)
+python indexer.py lutsk https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link --files "121974535/" --limit 20 --description volyn_darts_marriages
+
+# Вивантаження в Google Drive
+python indexer.py lutskyi_rayon /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --description volyn_darts_marriages --model gemini-3-flash-preview
+
+
 # Локальна папка — всі файли рекурсивно (БД: data/volyn.db)
 python indexer.py volyn /mnt/scans
 
@@ -73,9 +82,6 @@ python indexer.py volyn /mnt/scans --files "Архів/**"
 
 # Google Drive
 python indexer.py volyn https://drive.google.com/drive/folders/FOLDER_ID
-
-# Ліміт (за замовч. вже оброблені пропускаються; для перезапису додайте --rewrite)
-python python indexer.py lutskyi_rayon /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --description volyn_darts_marriages --model gemini-3-flash-preview
 
 # З описом контексту для моделі
 python indexer.py volyn /mnt/scans --description "Метричні книги Київської губернії, 19 ст."

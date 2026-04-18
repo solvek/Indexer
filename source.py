@@ -41,11 +41,21 @@ class Source(ABC):
         ...
 
 
-def create_source(source_str: str, drive_api_key: Optional[str] = None) -> Source:
+def create_source(
+    source_str: str,
+    drive_api_key: Optional[str] = None,
+    drive_oauth_client_secrets: Optional[str] = None,
+    drive_oauth_token_path: Optional[str] = None,
+) -> Source:
     """Фабрика: визначає тип джерела за рядком."""
     if source_str.startswith("http://") or source_str.startswith("https://"):
         from source_drive import DriveSource
-        return DriveSource(source_str, drive_api_key)
+        return DriveSource(
+            source_str,
+            drive_api_key,
+            drive_oauth_client_secrets,
+            drive_oauth_token_path,
+        )
     else:
         from source_local import LocalSource
         return LocalSource(source_str)

@@ -1,6 +1,7 @@
 """
-Джерело файлів: Google Drive (публічні папки через API key).
+Джерело файлів: Google Drive (API key для публічних папок або OAuth2, якщо key блокують).
 """
+import logging
 import os
 import re
 import tempfile
@@ -8,15 +9,33 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import requests
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from source import FileEntry, Source, SUPPORTED_EXTENSIONS
 
-# Типи MIME які відповідають зображенням
-IMAGE_MIMES = {
-    "image/jpeg", "image/png", "image/tiff", "image/webp",
-}
+OAUTH_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
 FOLDER_MIME = "application/vnd.google-apps.folder"
+_log = logging.getLogger(__name__)
+
+
+def _forbidden_media_message(file_label: str, is_oauth: bool) -> str:
+    if is_oauth:
+        return (
+            f"403 заборона завантаження: {file_label} — акаунт з OAuth, ймовірно, "
+            "не має права на цей файл, або власник вимкнув завантаження."
+        )
+    return (
+        f"403 заборона завантаження: {file_label} — з одним API key далеко не всі "
+        "файли папки можна зчитати так само, як з браузера: часто потрібно «доступ за "
+        "посиланням» + перегляд, інколи окремо для цього файла. "
+        "Спробуйте GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS (той акаунт, що дійсно "
+        "бачить цю папку) або виправте в Drive спільний доступ на проблемні файли."
+    )
 
 
 def extract_folder_id(url: str) -> str:
@@ -31,23 +50,104 @@ def extract_folder_id(url: str) -> str:
     raise ValueError(f"Не вдалось витягнути folder ID з URL: {url}")
 
 
+def _is_drive_method_blocked_403(e: HttpError) -> bool:
+    if e.resp.status != 403:
+        return False
+    msg = str(e)
+    if e.content and isinstance(e.content, bytes):
+        try:
+            msg = e.content.decode("utf-8", "replace")
+        except Exception:
+            pass
+    return "blocked" in msg.lower()
+
+
+def _save_oauth_token(creds: Credentials, token_path: str) -> None:
+    p = Path(token_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(creds.to_json(), encoding="utf-8")
+
+
+def _load_oauth_credentials(client_secrets_path: str, token_path: str) -> Credentials:
+    creds: Optional[Credentials] = None
+    t = Path(token_path)
+    if t.is_file():
+        creds = Credentials.from_authorized_user_file(str(t), OAUTH_SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            _save_oauth_token(creds, token_path)
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(client_secrets_path, OAUTH_SCOPES)
+            creds = flow.run_local_server(port=0)
+            _save_oauth_token(creds, token_path)
+    return creds
+
+
 class DriveSource(Source):
-    def __init__(self, url: str, api_key: Optional[str]):
-        if not api_key:
-            raise ValueError(
-                "GOOGLE_DRIVE_API_KEY не задано у .env — потрібен для Google Drive"
-            )
+    def __init__(
+        self,
+        url: str,
+        api_key: Optional[str] = None,
+        oauth_client_secrets: Optional[str] = None,
+        oauth_token_path: Optional[str] = None,
+    ):
         self.root_folder_id = extract_folder_id(url)
-        self.api_key = api_key
-        self.service = build("drive", "v3", developerKey=api_key)
+        self._creds: Optional[Credentials] = None
+        self._api_key: Optional[str] = None
+        self._oauth_token_path: Optional[str] = None
         # (folder, file) → drive file id
         self._id_map: Dict[Tuple[str, str], str] = {}
         # Ім'я кореневої папки за URL (для файлів безпосередньо в корені списку)
         self._root_label: str = ""
 
+        if oauth_client_secrets:
+            if not os.path.isfile(oauth_client_secrets):
+                raise ValueError(
+                    f"GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS: файл не знайдено: {oauth_client_secrets}"
+                )
+            if not oauth_token_path:
+                raise ValueError(
+                    "Для OAuth задайте GOOGLE_DRIVE_OAUTH_TOKEN (куди зберігати access token)"
+                )
+            _log.info(
+                "Google Drive: OAuth2, токен: %s (при потребі відкриється браузер)",
+                oauth_token_path,
+            )
+            self._oauth_token_path = oauth_token_path
+            self._creds = _load_oauth_credentials(oauth_client_secrets, oauth_token_path)
+            self.service = build("drive", "v3", credentials=self._creds, cache_discovery=False)
+        elif api_key:
+            self._api_key = api_key
+            self.service = build("drive", "v3", developerKey=api_key, cache_discovery=False)
+            _log.info(
+                "Google Drive: аутентифікація — тільки API key. "
+                "Помилка 403 «method … blocked» зникає, якщо в .env додати "
+                "GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS=шлях/до/JSON (OAuth client, тип Desktop) "
+                "і за потреби GOOGLE_DRIVE_OAUTH_TOKEN"
+            )
+        else:
+            raise ValueError(
+                "Для Google Drive задайте в .env: GOOGLE_DRIVE_API_KEY (публічна папка) "
+                "або GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS (файл OAuth client secret JSON) "
+                "коли API key у Google Cloud блокують методи Get/List. "
+                "Опційно: GOOGLE_DRIVE_OAUTH_TOKEN — шлях збереження токена (data/drive_oauth_token.json)."
+            )
+
     # ------------------------------------------------------------------ #
-    #  Public interface                                                     #
+    #  Public interface                                                  #
     # ------------------------------------------------------------------ #
+
+    def _ensure_valid_oauth_creds(self) -> None:
+        if not self._creds or not self._oauth_token_path:
+            return
+        if self._creds.valid:
+            return
+        if self._creds.expired and self._creds.refresh_token:
+            self._creds.refresh(Request())
+            _save_oauth_token(self._creds, self._oauth_token_path)
+        if not self._creds.valid:
+            raise RuntimeError("OAuth2: не вдалось оновити access token, видаліть token-файл і авторизуйтесь знову")
 
     def list_files(self, files_filter: Optional[str]) -> List[FileEntry]:
         self._id_map.clear()
@@ -70,9 +170,20 @@ class DriveSource(Source):
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         tmp.close()
 
-        # Використовуємо простий HTTP-запит (швидше ніж MediaIoBaseDownload для зображень)
-        url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&key={self.api_key}"
-        resp = requests.get(url, stream=True, timeout=60)
+        if self._creds:
+            self._ensure_valid_oauth_creds()
+            assert self._creds is not None
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+            resp = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {self._creds.token}"},
+                stream=True,
+                timeout=60,
+            )
+        else:
+            url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media&key={self._api_key}"
+            resp = requests.get(url, stream=True, timeout=60)
+
         resp.raise_for_status()
         with open(tmp.name, "wb") as f:
             for chunk in resp.iter_content(chunk_size=1 << 20):
@@ -88,7 +199,7 @@ class DriveSource(Source):
             entry._local_path = None
 
     # ------------------------------------------------------------------ #
-    #  Internal helpers                                                    #
+    #  Internal helpers                                                  #
     # ------------------------------------------------------------------ #
 
     def _collect(self, files_filter: Optional[str]) -> List[dict]:
@@ -119,14 +230,27 @@ class DriveSource(Source):
 
     def _list_pages(self, query: str, fields: str) -> List[dict]:
         """Обходить пагінацію Drive API."""
-        results = []
-        page_token = None
+        results: List[dict] = []
+        page_token: Optional[str] = None
         while True:
-            resp = (
-                self.service.files()
-                .list(q=query, fields=fields, pageToken=page_token, pageSize=1000)
-                .execute()
-            )
+            try:
+                req = self.service.files().list(
+                    q=query, fields=fields, pageToken=page_token, pageSize=1000
+                )
+                resp = req.execute()
+            except HttpError as e:
+                if _is_drive_method_blocked_403(e) and not self._creds:
+                    raise RuntimeError(
+                        "Google Drive повернув 403: методи files.list / files.get заборонені "
+                        "для вашого GOOGLE_DRIVE_API_KEY (таке буває через обмеження ключа в Google Cloud). "
+                        "Варіанти: 1) APIs & Services → Credentials → API key: "
+                        "зніміть зайві API restrictions або дозвольте «Google Drive API» повністю; "
+                        "2) налаштуйте OAuth: знайдіть «OAuth client ID» (Тип: Desktop) у "
+                        "тому ж проєкті, збережіть JSON, у .env "
+                        "GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS=шлях/до/файлу.json "
+                        "і запустіть знову (відкриється браузер, один раз)."
+                    ) from e
+                raise
             results.extend(resp.get("files", []))
             page_token = resp.get("nextPageToken")
             if not page_token:
@@ -165,8 +289,10 @@ class DriveSource(Source):
         ]
 
     def _find_subfolder_id(self, parent_id: str, name: str) -> str:
+        # Екранування лапок у query Drive API
+        name_esc = name.replace("'", r"\'")
         items = self._list_pages(
-            f"'{parent_id}' in parents and name='{name}' and mimeType='{FOLDER_MIME}' and trashed=false",
+            f"'{parent_id}' in parents and name='{name_esc}' and mimeType='{FOLDER_MIME}' and trashed=false",
             "files(id, name)",
         )
         if not items:
@@ -181,8 +307,9 @@ class DriveSource(Source):
         return current_id
 
     def _find_file_in_folder(self, folder_id: str, filename: str, folder_path: str) -> List[dict]:
+        fn_esc = filename.replace("'", r"\'")
         items = self._list_pages(
-            f"'{folder_id}' in parents and name='{filename}' and trashed=false",
+            f"'{folder_id}' in parents and name='{fn_esc}' and trashed=false",
             "files(id, name)",
         )
         if not items:
@@ -193,5 +320,15 @@ class DriveSource(Source):
 
     def _get_folder_display_name(self, folder_id: str) -> str:
         """Ім'я папки в Drive за fileId (для колонки scans.folder)."""
-        meta = self.service.files().get(fileId=folder_id, fields="name").execute()
-        return meta.get("name") or ""
+        try:
+            meta = self.service.files().get(fileId=folder_id, fields="name").execute()
+            return meta.get("name") or ""
+        except HttpError as e:
+            if e.resp.status in (403, 404):
+                _log.warning(
+                    "Drive files.get (назва кореневої папки) недоступний (HTTP %s); "
+                    "для файлів з кореня в колонці folder буде id папки.",
+                    e.resp.status,
+                )
+                return folder_id
+            raise
