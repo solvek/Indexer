@@ -61,8 +61,11 @@ def main():
   # Підпапка рекурсивно
   python indexer.py /mnt/scans --files "Архів/**"
 
-  # Google Drive: обробити до 10 нових файлів (уже в БД не входять у ліміт)
-  python indexer.py https://drive.google.com/drive/folders/ID --limit 10 --no-rewrite
+  # Google Drive: обробити до 10 нових файлів (уже в БД не входять у ліміт; за замовч. без перезапису)
+  python indexer.py https://drive.google.com/drive/folders/ID --limit 10
+
+  # Примусово перезаписати вже проіндексовані скани
+  python indexer.py /mnt/scans --rewrite
 
   # Довільний опис для моделі (як раніше)
   python indexer.py /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
@@ -85,8 +88,8 @@ def main():
         help="Не більше N спроб обробки (файли, що пропускаються як вже в БД, не рахуються)",
     )
     parser.add_argument(
-        "--rewrite", action=argparse.BooleanOptionalAction, default=True,
-        help="Перезаписувати вже оброблені скани (default: --rewrite)",
+        "--rewrite", action=argparse.BooleanOptionalAction, default=False,
+        help="Перезаписувати вже оброблені скани (за замовч.: --no-rewrite)",
     )
     parser.add_argument(
         "--description", default=None,

@@ -74,8 +74,8 @@ python indexer.py /mnt/scans --files "Архів/**"
 # Google Drive
 python indexer.py https://drive.google.com/drive/folders/FOLDER_ID
 
-# Ліміт + не перезаписувати вже оброблені
-python indexer.py /home/solvek/Projects/VolynRagz/scans/122484190 --limit 2 --description volyn_darts_marriages --no-rewrite
+# Ліміт (за замовч. вже оброблені пропускаються; для перезапису додайте --rewrite)
+python indexer.py /home/solvek/Projects/VolynRagz/scans/122484190 --limit 2 --description volyn_darts_marriages
 
 # З описом контексту для моделі
 python indexer.py /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
@@ -90,8 +90,8 @@ python indexer.py /mnt/scans --verbose
 |---|---|---|---|
 | `source` | positional | — | Локальний шлях або Google Drive URL |
 | `--files` | optional | всі рекурсивно | Фільтр файлів (див. нижче) |
-| `--limit` | optional | без ліміту | Максимум спроб обробки; файли, що лише пропускаються (вже в БД при `--no-rewrite`), у ліміт не входять |
-| `--rewrite` / `--no-rewrite` | optional | `--rewrite` | Перезаписувати вже оброблені |
+| `--limit` | optional | без ліміту | Максимум спроб обробки; файли, що лише пропускаються (вже в БД без `--rewrite`), у ліміт не входять |
+| `--rewrite` / `--no-rewrite` | optional | `--no-rewrite` | Перезаписувати вже оброблені (`--rewrite`) чи пропускати їх |
 | `--description` | optional | — | Додатковий контекст для моделі |
 | `--model` | optional | з `.env` | Назва моделі Gemini |
 | `--temperature` | optional | `0.1` | Температура 0.0–1.0 |
