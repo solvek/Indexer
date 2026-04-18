@@ -63,8 +63,11 @@ def main():
   # Google Drive: обробити до 10 нових файлів (уже в БД не входять у ліміт)
   python indexer.py https://drive.google.com/drive/folders/ID --limit 10 --no-rewrite
 
-  # З описом документів для моделі
+  # Довільний опис для моделі (як раніше)
   python indexer.py /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
+
+  # Специфіка запуску з файлу prompts/<ім'я>.txt (без розширення в аргументі)
+  python indexer.py /mnt/scans --description volyn_darts_marriages
         """,
     )
 
@@ -86,7 +89,10 @@ def main():
     )
     parser.add_argument(
         "--description", default=None,
-        help="Додатковий контекст для моделі (тип документів, регіон тощо)",
+        help=(
+            "Контекст для моделі: довільний рядок АБО ім'я файлу без .txt з каталогу "
+            "prompts/ (лише латиниця, цифри, _ та -), наприклад volyn_darts_marriages"
+        ),
     )
     parser.add_argument(
         "--model", default=default_model,

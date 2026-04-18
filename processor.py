@@ -14,8 +14,13 @@ from google import genai
 from google.genai import types
 
 
-_PROMPT_FILE = Path(__file__).resolve().parent / "prompts" / "document_extraction.txt"
+_PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+_PROMPT_FILE = _PROMPTS_DIR / "document_extraction.txt"
 _prompt_template_cache: Optional[str] = None
+
+# Для --description: якщо значення збігається з цим шаблоном, шукаємо файл
+# prompts/<значення>.txt (специфіка запуску), інакше — довільний текст (як раніше).
+_RUN_SPEC_DESCRIPTION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _load_prompt_template() -> str:
@@ -49,7 +54,18 @@ def extract_number(filename: str) -> Optional[int]:
 
 
 def _build_prompt(description: Optional[str]) -> str:
-    extra = f"\nДодатковий контекст: {description}" if description else ""
+    extra = ""
+    if description:
+        desc = description.strip()
+        if desc:
+            if _RUN_SPEC_DESCRIPTION_RE.fullmatch(desc):
+                run_spec_path = (_PROMPTS_DIR / f"{desc}.txt").resolve()
+                if run_spec_path.is_file():
+                    extra = "\n" + run_spec_path.read_text(encoding="utf-8")
+                else:
+                    extra = f"\nДодатковий контекст: {desc}"
+            else:
+                extra = f"\nДодатковий контекст: {desc}"
     return _load_prompt_template().format(extra=extra)
 
 
