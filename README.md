@@ -93,10 +93,10 @@ python indexer.py DBNAME SOURCE [опції]
 
 ```bash
 # Ліміт (за замовч. вже оброблені пропускаються; для перезапису додайте --rewrite)
-python indexer.py lutsk https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link --files "121974535/" --limit 20 --description volyn_darts_marriages
+python indexer.py lutsk_marriages https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link --files "121974535/" --limit 20 --description volyn_darts_marriages
 
 # Вивантаження в Google Drive
-python indexer.py lutskyi_rayon /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --description volyn_darts_marriages --model gemini-3-flash-preview
+python indexer.py lutskyi_rayon_marriages /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --description volyn_darts_marriages --model gemini-3-flash-preview
 
 
 # Локальна папка — всі файли рекурсивно (БД: data/volyn.db)

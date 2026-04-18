@@ -16,12 +16,40 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-from source import FileEntry, Source, SUPPORTED_EXTENSIONS
+from source import FileEntry, Source, SUPPORTED_EXTENSIONS, normalize_files_filter
 
 OAUTH_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
 
 FOLDER_MIME = "application/vnd.google-apps.folder"
+SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+# Папки на shared drives (Team Drives) без цих полів files.list зазвичай повертає порожній список.
+_DRIVE_LIST_FILE_KW: Dict[str, object] = {
+    "supportsAllDrives": True,
+    "includeItemsFromAllDrives": True,
+}
+# Коли в імені файла в Drive немає суфікса, MIME з API → суфікс тимчасового файла для Gemini
+_DRIVE_MIME_TO_TMP_SUFFIX: Dict[str, str] = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/tiff": ".tif",
+    "image/x-tiff": ".tif",
+    "image/webp": ".webp",
+    "image/heic": ".heic",
+    "image/heif": ".heif",
+}
 _log = logging.getLogger(__name__)
+
+
+def _tmp_suffix_for_image_mime(mime: Optional[str]) -> str:
+    if not mime:
+        return ".jpg"
+    m = mime.split(";")[0].strip().lower()
+    if m in _DRIVE_MIME_TO_TMP_SUFFIX:
+        return _DRIVE_MIME_TO_TMP_SUFFIX[m]
+    if m.startswith("image/"):
+        return ".jpg"
+    return ".jpg"
 
 
 def _parse_drive_error_body(resp: requests.Response) -> str:
@@ -148,6 +176,8 @@ class DriveSource(Source):
         service_account_path: Optional[str] = None,
     ):
         self.root_folder_id = extract_folder_id(url)
+        # id папки для list/get дітей: збігається з URL, або ціль ярлика, якщо в URL id ярлика
+        self._browse_root_id: str = self.root_folder_id
         self._creds: Optional[Any] = None
         self._api_key: Optional[str] = None
         self._oauth_token_path: Optional[str] = None
@@ -156,6 +186,8 @@ class DriveSource(Source):
         self._id_map: Dict[Tuple[str, str], str] = {}
         # Ім'я кореневої папки за URL (для файлів безпосередньо в корені списку)
         self._root_label: str = ""
+        # ID спільного диску (Team Drive), якщо коренева папка лежить там; для files.list(corpora=drive)
+        self._list_drive_id: Optional[str] = None
 
         if service_account_path:
             if not os.path.isfile(service_account_path):
@@ -223,15 +255,136 @@ class DriveSource(Source):
                 "OAuth2: не вдалось оновити access token, видаліть token-файл і авторизуйтесь знову"
             )
 
+    def _load_root_list_context(self) -> None:
+        """Підготовка до _collect: мітка, driveId, і _browse_root_id (ярлик → цільова папка)."""
+        self._list_drive_id = None
+        self._browse_root_id = self.root_folder_id
+        try:
+            meta = self.service.files().get(
+                fileId=self.root_folder_id,
+                fields="name,driveId,mimeType,shortcutDetails",
+                supportsAllDrives=True,
+            ).execute()
+        except HttpError as e:
+            if e.resp.status in (403, 404):
+                _log.warning(
+                    "Drive files.get (id з URL) HTTP %s; ім'я/ driveId невідомі — тимчасовий label=id.",
+                    e.resp.status,
+                )
+                self._root_label = self.root_folder_id
+                return
+            raise
+        mtype = (meta or {}).get("mimeType", "")
+
+        if mtype == SHORTCUT_MIME:
+            d = (meta or {}).get("shortcutDetails") or {}
+            tid, tm = d.get("targetId"), d.get("targetMimeType")
+            if tid and tm == FOLDER_MIME:
+                _log.info(
+                    "За URL задано ярлик на папку; обхід цільової папки (targetId=%s).", tid
+                )
+                self._browse_root_id = tid
+                try:
+                    meta2 = self.service.files().get(
+                        fileId=tid, fields="name,driveId", supportsAllDrives=True
+                    ).execute()
+                except HttpError as e2:
+                    if e2.resp.status in (403, 404):
+                        _log.warning(
+                            "Немає доступу files.get до цільової папки ярлика (HTTP %s). "
+                            "Додайте service account до цільової папки, не лише до ярлика.",
+                            e2.resp.status,
+                        )
+                    else:
+                        _log.warning("files.get(ціль ярлика): %s", e2)
+                    self._root_label = (meta or {}).get("name") or self.root_folder_id
+                    return
+                self._root_label = (meta2 or {}).get("name") or ""
+                did = (meta2 or {}).get("driveId")
+                if did:
+                    self._list_drive_id = did
+                    _log.info("Цільова папка (shared drive), driveId=%s", did)
+                return
+
+            if tid and tm and tm != FOLDER_MIME:
+                _log.warning(
+                    "URL вказує на ярлик на файл, не на папку. Вкажіть посилання на папку/ярлик папки."
+                )
+            self._root_label = (meta or {}).get("name") or self.root_folder_id
+            return
+
+        if mtype and mtype != FOLDER_MIME:
+            _log.warning(
+                "id з URL не папка (mimeType=%s). Для такого id files.list('… in parents') порожні. Потрібен folder id.",
+                mtype,
+            )
+        self._root_label = (meta or {}).get("name") or ""
+        did = (meta or {}).get("driveId")
+        if did:
+            self._list_drive_id = did
+            _log.info("Коренева папка на shared drive, driveId=%s", did)
+
+    @staticmethod
+    def _is_indexable_drive_image(name: str, mime: str) -> bool:
+        """Скан у списку: стандартні розширення аби будь-яке image/* з Drive, крім svg."""
+        if Path(name).suffix.lower() in SUPPORTED_EXTENSIONS:
+            return True
+        m = (mime or "").split(";")[0].strip().lower()
+        return m.startswith("image/") and "svg" not in m
+
+    def _get_shortcut_target_info(
+        self, shortcut_id: str
+    ) -> Optional[Tuple[str, str, str]]:
+        # (target_id, mime, name); для папки name=""; target_name для файлів — реальна назва цілі.
+        try:
+            meta = self.service.files().get(
+                fileId=shortcut_id, fields="shortcutDetails", supportsAllDrives=True
+            ).execute()
+        except HttpError:
+            return None
+        d = (meta or {}).get("shortcutDetails")
+        if not d:
+            return None
+        tid = d.get("targetId")
+        tm = d.get("targetMimeType")
+        if not tid or not tm:
+            return None
+        if tm == FOLDER_MIME:
+            return (tid, FOLDER_MIME, "")
+        try:
+            tmeta = self.service.files().get(
+                fileId=tid, fields="name", supportsAllDrives=True
+            ).execute()
+        except HttpError:
+            return None
+        tname = (tmeta or {}).get("name", "")
+        return (tid, tm, tname)
+
     def list_files(self, files_filter: Optional[str]) -> List[FileEntry]:
+        files_filter = normalize_files_filter(files_filter)
         self._id_map.clear()
-        self._root_label = self._get_folder_display_name(self.root_folder_id)
+        self._load_root_list_context()
         raw = self._collect(files_filter)
+        if not raw:
+            self._log_drive_list_no_images_diagnostic()
+            _log.warning(
+                "Google Drive: знайдено 0 зображень. Формати, які шукаємо: %s. "
+                "Переконайтесь, що service account (або OAuth) має доступ, у папці/підпапках є зображення "
+                "(а не лише Google Docs) і, якщо потрібно, що ярлики вказують на ці цільові папки/файли.",
+                ", ".join(sorted(SUPPORTED_EXTENSIONS)),
+            )
         entries = []
         for r in raw:
             key = (r["folder"], r["name"])
             self._id_map[key] = r["id"]
-            entries.append(FileEntry(folder=r["folder"], file=r["name"], _drive_id=r["id"]))
+            entries.append(
+                FileEntry(
+                    folder=r["folder"],
+                    file=r["name"],
+                    _drive_id=r["id"],
+                    _drive_mime=r.get("mimeType"),
+                )
+            )
         return sorted(entries, key=lambda e: (e.folder, e.file))
 
     def _open_drive_media(
@@ -239,7 +392,8 @@ class DriveSource(Source):
     ) -> requests.Response:
         """Stream GET .../files/{id}?alt=media (так само, як клієнт Drive API)."""
         base = f"https://www.googleapis.com/drive/v3/files/{file_id}"
-        params: Dict[str, str] = {"alt": "media"}
+        # Без supportsAllDrives= тру файли з shared drive часто не віддаються
+        params: Dict[str, str] = {"alt": "media", "supportsAllDrives": "true"}
         if acknowledge_abuse:
             params["acknowledgeAbuse"] = "true"
         if self._creds:
@@ -262,6 +416,10 @@ class DriveSource(Source):
             raise RuntimeError(f"Невідомий Drive ID для {entry.folder}/{entry.file}")
 
         suffix = Path(entry.file).suffix
+        if not suffix and getattr(entry, "_drive_mime", None):
+            suffix = _tmp_suffix_for_image_mime(entry._drive_mime)
+        if not suffix:
+            suffix = ".jpg"
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         tmp.close()
         label = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
@@ -303,18 +461,58 @@ class DriveSource(Source):
     #  Internal helpers                                                  #
     # ------------------------------------------------------------------ #
 
+    def _log_drive_list_no_images_diagnostic(self) -> None:
+        """Після 0 зображень: скільки елементів у корені; якщо 0 — коротка підказка по доступу SA."""
+        try:
+            level1 = self._list_pages(
+                f"'{self._browse_root_id}' in parents and trashed=false",
+                "nextPageToken, files(name, mimeType, id)",
+            )
+        except Exception as e:
+            _log.warning("Drive: не вдалось прочитати вміст кореневої папки: %s", e)
+            return
+        sample = [(x.get("name"), x.get("mimeType")) for x in level1[:8]]
+        _log.warning(
+            "Drive: у корені (1 рівень) елементів: %d. Приклади (ім'я, mimeType): %s",
+            len(level1),
+            sample,
+        )
+        if not level1:
+            sa_email = ""
+            c = self._creds
+            if self._auth_mode == "service_account" and c and getattr(c, "service_account_email", None):
+                sa_email = c.service_account_email
+            try:
+                m = self.service.files().get(
+                    fileId=self._browse_root_id,
+                    fields="capabilities,shared",
+                    supportsAllDrives=True,
+                ).execute()
+                cap = (m or {}).get("capabilities", {}) or {}
+                _log.warning(
+                    "Drive: list порожній. shared=%s, canListChildren=%s. "
+                    "Перевірте «Спільний доступ» для service account (доступ за посиланням для API часто не еквівалентний).%s",
+                    (m or {}).get("shared"),
+                    cap.get("canListChildren"),
+                    f" SA: {sa_email}." if sa_email else "",
+                )
+            except HttpError as e2:
+                _log.warning("Drive: files.get(корінь) HTTP %s — перевірте id і права.", e2.resp.status)
+            except Exception as e2:
+                _log.debug("Drive: діагностика кореня: %s", e2)
+
     def _collect(self, files_filter: Optional[str]) -> List[dict]:
         if files_filter is None:
-            return self._list_recursive(self.root_folder_id, "")
+            return self._list_recursive(self._browse_root_id, "")
 
         if files_filter.endswith("/**"):
             subfolder_name = files_filter[:-3]
-            folder_id = self._find_subfolder_id(self.root_folder_id, subfolder_name)
+            folder_id = self._find_subfolder_id(self._browse_root_id, subfolder_name)
             return self._list_recursive(folder_id, subfolder_name)
 
         if files_filter.endswith("/"):
             subfolder_name = files_filter.rstrip("/")
-            folder_id = self._find_subfolder_id(self.root_folder_id, subfolder_name)
+            folder_id = self._find_subfolder_id(self._browse_root_id, subfolder_name)
             return self._list_flat(folder_id, subfolder_name)
 
         # Конкретний файл: може бути "file.jpg" або "Folder/file.jpg"
@@ -323,20 +521,23 @@ class DriveSource(Source):
         folder_path = "/".join(parts[:-1]) if len(parts) > 1 else ""
 
         if folder_path:
-            parent_id = self._resolve_folder_path(self.root_folder_id, folder_path)
+            parent_id = self._resolve_folder_path(self._browse_root_id, folder_path)
         else:
-            parent_id = self.root_folder_id
+            parent_id = self._browse_root_id
 
         return self._find_file_in_folder(parent_id, filename, folder_path)
 
-    def _list_pages(self, query: str, fields: str) -> List[dict]:
-        """Обходить пагінацію Drive API."""
+    def _list_pages_paginate(self, query: str, fields: str, list_kw: Dict[str, object]) -> List[dict]:
         results: List[dict] = []
         page_token: Optional[str] = None
         while True:
             try:
                 req = self.service.files().list(
-                    q=query, fields=fields, pageToken=page_token, pageSize=1000
+                    q=query,
+                    fields=fields,
+                    pageToken=page_token,
+                    pageSize=1000,
+                    **list_kw,
                 )
                 resp = req.execute()
             except HttpError as e:
@@ -354,6 +555,27 @@ class DriveSource(Source):
                 break
         return results
 
+    def _list_pages(self, query: str, fields: str) -> List[dict]:
+        """Пагінація files.list. Team drive: corpora + driveId; інакше allDrives."""
+        d_id = self._list_drive_id
+        if d_id:
+            list_kw: Dict[str, object] = {
+                **_DRIVE_LIST_FILE_KW,
+                "corpora": "drive",
+                "driveId": d_id,
+            }
+        else:
+            list_kw = {**_DRIVE_LIST_FILE_KW, "corpora": "allDrives"}
+        try:
+            return self._list_pages_paginate(query, fields, list_kw)
+        except HttpError as e:
+            if e.resp.status == 400 and not d_id and list_kw.get("corpora") == "allDrives":
+                _log.warning(
+                    "Drive: files.list (corpora=allDrives) → HTTP 400, повтор без corpora (лише supportsAllDrives+includeAll)"
+                )
+                return self._list_pages_paginate(query, fields, {**_DRIVE_LIST_FILE_KW})
+            raise
+
     def _list_recursive(self, folder_id: str, folder_path: str) -> List[dict]:
         results = []
         items = self._list_pages(
@@ -361,15 +583,34 @@ class DriveSource(Source):
             "nextPageToken, files(id, name, mimeType)",
         )
         for item in items:
-            if item["mimeType"] == FOLDER_MIME:
+            m = item.get("mimeType", "")
+            if m == FOLDER_MIME:
                 sub_path = f"{folder_path}/{item['name']}" if folder_path else item["name"]
                 results.extend(self._list_recursive(item["id"], sub_path))
-            elif Path(item["name"]).suffix.lower() in SUPPORTED_EXTENSIONS:
+            elif m == SHORTCUT_MIME:
+                st = self._get_shortcut_target_info(item["id"])
+                if not st:
+                    continue
+                t_id, t_mime, t_name = st
+                if t_mime == FOLDER_MIME:
+                    sub_path = f"{folder_path}/{item['name']}" if folder_path else item["name"]
+                    results.extend(self._list_recursive(t_id, sub_path))
+                elif t_name and self._is_indexable_drive_image(t_name, t_mime):
+                    results.append(
+                        {
+                            "id": t_id,
+                            "name": t_name,
+                            "folder": folder_path or self._root_label,
+                            "mimeType": t_mime,
+                        }
+                    )
+            elif self._is_indexable_drive_image(item.get("name", ""), m):
                 results.append(
                     {
                         "id": item["id"],
                         "name": item["name"],
                         "folder": folder_path or self._root_label,
+                        "mimeType": m,
                     }
                 )
         return results
@@ -380,9 +621,14 @@ class DriveSource(Source):
             "nextPageToken, files(id, name, mimeType)",
         )
         return [
-            {"id": i["id"], "name": i["name"], "folder": folder_path}
+            {
+                "id": i["id"],
+                "name": i["name"],
+                "folder": folder_path,
+                "mimeType": (i.get("mimeType") or ""),
+            }
             for i in items
-            if Path(i["name"]).suffix.lower() in SUPPORTED_EXTENSIONS
+            if self._is_indexable_drive_image(i.get("name", ""), i.get("mimeType", ""))
         ]
 
     def _find_subfolder_id(self, parent_id: str, name: str) -> str:
@@ -407,25 +653,16 @@ class DriveSource(Source):
         fn_esc = filename.replace("'", r"\'")
         items = self._list_pages(
             f"'{folder_id}' in parents and name='{fn_esc}' and trashed=false",
-            "files(id, name)",
+            "files(id, name, mimeType)",
         )
         if not items:
             raise ValueError(f"Файл '{filename}' не знайдено")
+        meta = items[0]
         return [
-            {"id": items[0]["id"], "name": filename, "folder": folder_path or self._root_label}
+            {
+                "id": meta["id"],
+                "name": filename,
+                "folder": folder_path or self._root_label,
+                "mimeType": (meta.get("mimeType") or ""),
+            }
         ]
-
-    def _get_folder_display_name(self, folder_id: str) -> str:
-        """Ім'я папки в Drive за fileId (для колонки scans.folder)."""
-        try:
-            meta = self.service.files().get(fileId=folder_id, fields="name").execute()
-            return meta.get("name") or ""
-        except HttpError as e:
-            if e.resp.status in (403, 404):
-                _log.warning(
-                    "Drive files.get (назва кореневої папки) недоступний (HTTP %s); "
-                    "для файлів з кореня в колонці folder буде id папки.",
-                    e.resp.status,
-                )
-                return folder_id
-            raise

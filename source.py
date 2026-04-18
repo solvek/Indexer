@@ -6,7 +6,23 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
-SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
+SUPPORTED_EXTENSIONS = {
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".tif",
+    ".tiff",
+    ".webp",
+    ".heic",
+    ".heif",
+}
+
+
+def normalize_files_filter(files_filter: Optional[str]) -> Optional[str]:
+    """'' або лише пробіли → None (той самий режим, що «без --files»)."""
+    if files_filter is not None and not str(files_filter).strip():
+        return None
+    return files_filter
 
 
 @dataclass
@@ -15,6 +31,8 @@ class FileEntry:
     file: str             # ім'я файлу
     _local_path: Optional[str] = field(default=None, repr=False)  # для локального джерела
     _drive_id: Optional[str] = field(default=None, repr=False)    # для Google Drive
+    # MIME з Drive — як у назві немає .jpg, щоби temp-файл мав вірний суфікс / тип для моделі
+    _drive_mime: Optional[str] = field(default=None, repr=False)
 
 
 class Source(ABC):
@@ -23,7 +41,7 @@ class Source(ABC):
         """Повертає список файлів за фільтром.
 
         files_filter варіанти:
-          None            → всі файли рекурсивно (за замовчуванням)
+          None, ""        → усі підпапки, усі підтримувані файли рекурсивно (за замовчуванням)
           "scan_001.jpg"  → конкретний файл (або відносний шлях: "Folder/scan.jpg")
           "FolderName/"   → всі файли у папці (не рекурсивно)
           "FolderName/**" → всі файли у папці рекурсивно

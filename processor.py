@@ -82,6 +82,8 @@ _MIME_MAP = {
     ".tif": "image/tiff",
     ".tiff": "image/tiff",
     ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".heif": "image/heic",
 }
 
 # Клієнт ініціалізується один раз через init_client()

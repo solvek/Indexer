@@ -19,7 +19,7 @@ load_dotenv()
 
 import db
 import processor
-from source import create_source
+from source import create_source, normalize_files_filter
 
 
 # ------------------------------------------------------------------ #
@@ -146,6 +146,9 @@ def main():
     args = parser.parse_args()
     if args.request_delay < 0:
         parser.error("--request-delay має бути >= 0")
+
+    args.files = normalize_files_filter(args.files)
+
     setup_logging(args.verbose)
     log = logging.getLogger("indexer")
 

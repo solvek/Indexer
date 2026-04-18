@@ -4,7 +4,7 @@
 from pathlib import Path
 from typing import List, Optional
 
-from source import FileEntry, Source, SUPPORTED_EXTENSIONS
+from source import FileEntry, Source, SUPPORTED_EXTENSIONS, normalize_files_filter
 
 
 class LocalSource(Source):
@@ -33,8 +33,9 @@ class LocalSource(Source):
         return sorted(entries, key=lambda e: (e.folder, e.file))
 
     def _resolve_paths(self, files_filter: Optional[str]):
+        files_filter = normalize_files_filter(files_filter)
         if files_filter is None:
-            # Всі файли рекурсивно
+            # Усі підпапки, усі підтримувані файли рекурсивно (за замовчанням, коли фільтр не задано)
             return self.base.rglob("*")
 
         if files_filter.endswith("/**"):
