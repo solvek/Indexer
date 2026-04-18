@@ -25,6 +25,8 @@ class LocalSource(Source):
                 continue
             rel = p.relative_to(self.base)
             folder = str(rel.parent) if str(rel.parent) != "." else ""
+            if not folder:
+                folder = self.base.name
             entries.append(
                 FileEntry(folder=folder, file=p.name, _local_path=str(p))
             )

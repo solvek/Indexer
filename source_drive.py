@@ -42,6 +42,8 @@ class DriveSource(Source):
         self.service = build("drive", "v3", developerKey=api_key)
         # (folder, file) → drive file id
         self._id_map: Dict[Tuple[str, str], str] = {}
+        # Ім'я кореневої папки за URL (для файлів безпосередньо в корені списку)
+        self._root_label: str = ""
 
     # ------------------------------------------------------------------ #
     #  Public interface                                                     #
@@ -49,6 +51,7 @@ class DriveSource(Source):
 
     def list_files(self, files_filter: Optional[str]) -> List[FileEntry]:
         self._id_map.clear()
+        self._root_label = self._get_folder_display_name(self.root_folder_id)
         raw = self._collect(files_filter)
         entries = []
         for r in raw:
@@ -141,7 +144,13 @@ class DriveSource(Source):
                 sub_path = f"{folder_path}/{item['name']}" if folder_path else item["name"]
                 results.extend(self._list_recursive(item["id"], sub_path))
             elif Path(item["name"]).suffix.lower() in SUPPORTED_EXTENSIONS:
-                results.append({"id": item["id"], "name": item["name"], "folder": folder_path})
+                results.append(
+                    {
+                        "id": item["id"],
+                        "name": item["name"],
+                        "folder": folder_path or self._root_label,
+                    }
+                )
         return results
 
     def _list_flat(self, folder_id: str, folder_path: str) -> List[dict]:
@@ -178,4 +187,11 @@ class DriveSource(Source):
         )
         if not items:
             raise ValueError(f"Файл '{filename}' не знайдено")
-        return [{"id": items[0]["id"], "name": filename, "folder": folder_path}]
+        return [
+            {"id": items[0]["id"], "name": filename, "folder": folder_path or self._root_label}
+        ]
+
+    def _get_folder_display_name(self, folder_id: str) -> str:
+        """Ім'я папки в Drive за fileId (для колонки scans.folder)."""
+        meta = self.service.files().get(fileId=folder_id, fields="name").execute()
+        return meta.get("name") or ""
