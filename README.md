@@ -15,20 +15,21 @@ python --version
 
 ### 2. Залежності
 
+На **Debian / Ubuntu** системний `pip` часто блокується (PEP 668, *externally-managed-environment*). Тоді ставте залежності **лише у venv**, не через `sudo pip` і не з `--break-system-packages`.
+
+**Рекомендовано** (Linux, macOS, сервер):
+
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Або у віртуальному середовищі (рекомендовано):
+Якщо немає модуля `venv`: `sudo apt install python3-venv python3-full`.
+
+Без venv (лише якщо середовище це дозволяє):
+
 ```bash
-python -m venv .venv
-
-# Linux / macOS / Oracle Cloud
-source .venv/bin/activate
-
-# Windows
-.venv\Scripts\activate
-
 pip install -r requirements.txt
 ```
 
@@ -93,7 +94,7 @@ python indexer.py DBNAME SOURCE [опції]
 
 ```bash
 # Ліміт (за замовч. вже оброблені пропускаються; для перезапису додайте --rewrite)
-python indexer.py lutsk_marriages https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link --limit 20 --description volyn_darts_marriages
+python indexer.py lutsk_marriages 'https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link' --limit 20 --description volyn_darts_marriages
 
 # Вивантаження в Google Drive
 python indexer.py lutskyi_rayon_marriages /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --description volyn_darts_marriages --model gemini-3-flash-preview
@@ -150,14 +151,67 @@ python indexer.py volyn /mnt/scans --verbose
 
 ## Моніторинг
 
-Лог пишеться одночасно в консоль і у файл `indexer.log` поряд зі скриптом.
+Лог пишеться одночасно в консоль і у файл **`indexer.log`** поряд зі скриптом. Якщо запускали через **`nohup`** з перенаправленням у файл, додатковий вивід може бути в **`nohup.out`** у тому ж каталозі.
 
 ```bash
-# Стежити за процесом у реальному часі (локально або по SSH)
+# Оновлення в реальному часі (локально або по SSH)
 tail -f indexer.log
 
+# За потреби обидва файли
+tail -f indexer.log nohup.out
+```
+
+`Ctrl+C` під час `tail -f` зупиняє лише перегляд логу, **не** індексатор.
+
+```bash
 # Швидка статистика з бази
 sqlite3 data/volyn.db "SELECT COUNT(*) || ' сканів, ' || (SELECT COUNT(*) FROM persons) || ' осіб' FROM scans"
+```
+
+## Довгий запуск після виходу з SSH
+
+Щоб процес **не завершився** після закриття терміналу або розриву SSH, запускайте його у **фоні** (`nohup` і `&`) або в **`tmux`** / **`screen`**.
+
+### `nohup`
+
+Утиліта **`nohup`** входить до пакета **`coreutils`** (на Debian/Ubuntu зазвичай уже є як `/usr/bin/nohup`). Окремого пакета `apt install nohup` немає; якщо команди немає: `sudo apt install coreutils`.
+
+Приклад з каталогу проєкту та активованим venv:
+
+```bash
+cd /шлях/до/Indexer
+source .venv/bin/activate
+nohup python indexer.py lutsk_marriages 'https://drive.google.com/drive/folders/FOLDER_ID?usp=drive_link' --description volyn_darts_marriages </dev/null >>nohup.out 2>&1 &
+```
+
+**Важливо:**
+
+- **`&` в кінці рядка** — без нього процес іде на **передній план**: здаватиметься, що термінал «завис», хоча скрипт просто працює. Повідомлення *nohup: ignoring input and appending output to 'nohup.out'* означає, що інтерактивний ввід ігнорується — це нормально для `nohup`.
+- **URL у лапках** — символ `?` у посиланні Google Drive інакше обрізає аргументи в shell.
+- Після `&` з’явиться PID у вигляді `[1] 12345` і знову запрошення оболонки (`$`) — можна закривати SSH.
+
+### Зупинити фоновий індексатор
+
+Зупиняється **процес Python** (індексатор), а не «nohup» як абстракція:
+
+```bash
+pgrep -af indexer.py
+kill PID           # спочатку так (SIGTERM)
+kill -9 PID      # лише якщо процес не завершився (SIGKILL; ризик обірваної операції)
+```
+
+Якщо запускали в тій самій сесії з `&` і бачили номер фону `[1]`: `jobs -l`, потім `kill %1`.
+
+### `tmux` (альтернатива)
+
+Зручно, коли потрібна «жива» консоль і повторне підключення:
+
+```bash
+sudo apt install tmux    # за потреби
+tmux new -s indexer
+# усередині: cd …, source .venv/bin/activate, python indexer.py …
+# від’єднатися, не зупиняючи сесію: Ctrl+B, потім D
+# пізніше: tmux attach -t indexer
 ```
 
 ## Структура бази даних
