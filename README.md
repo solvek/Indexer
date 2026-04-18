@@ -48,46 +48,47 @@ cp sample.env .env
 ## Використання
 
 ```bash
-python indexer.py SOURCE [опції]
+python indexer.py DBNAME SOURCE [опції]
 ```
 
-`SOURCE` — перший обов'язковий аргумент: локальний шлях або Google Drive URL.
+`DBNAME` — перший обов'язковий аргумент: ім'я або шлях до файлу SQLite. Відносні імена потрапляють у каталог **`data/`** (суфікс `.db` додається, якщо не вказано); абсолютний шлях використовується як є. `SOURCE` — локальний шлях або Google Drive URL.
 
 ### Приклади
 
 ```bash
-# Локальна папка — всі файли рекурсивно
-python indexer.py /mnt/scans
+# Локальна папка — всі файли рекурсивно (БД: data/volyn.db)
+python indexer.py volyn /mnt/scans
 
 # Конкретний файл
-python indexer.py /mnt/scans --files scan_00023.jpg
+python indexer.py volyn /mnt/scans --files scan_00023.jpg
 
 # Файл у підпапці
-python indexer.py /mnt/scans --files "Метрики/scan_00023.jpg"
+python indexer.py volyn /mnt/scans --files "Метрики/scan_00023.jpg"
 
 # Тільки папка "Метрики" (без підпапок)
-python indexer.py /mnt/scans --files "Метрики/"
+python indexer.py volyn /mnt/scans --files "Метрики/"
 
 # Папка "Архів" рекурсивно
-python indexer.py /mnt/scans --files "Архів/**"
+python indexer.py volyn /mnt/scans --files "Архів/**"
 
 # Google Drive
-python indexer.py https://drive.google.com/drive/folders/FOLDER_ID
+python indexer.py volyn https://drive.google.com/drive/folders/FOLDER_ID
 
 # Ліміт (за замовч. вже оброблені пропускаються; для перезапису додайте --rewrite)
-python indexer.py /home/solvek/Projects/VolynRagz/scans/122484190 --limit 2 --description volyn_darts_marriages
+python indexer.py volyn /home/solvek/Projects/VolynRagz/scans/122484190 --limit 2 --description volyn_darts_marriages
 
 # З описом контексту для моделі
-python indexer.py /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
+python indexer.py volyn /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
 
 # Детальні логи
-python indexer.py /mnt/scans --verbose
+python indexer.py volyn /mnt/scans --verbose
 ```
 
 ### Параметри
 
 | Параметр | Тип | За замовч. | Опис |
 |---|---|---|---|
+| `dbname` | positional | — | Ім'я або шлях до SQLite; відносні → `data/…` (без розширення додається `.db`) |
 | `source` | positional | — | Локальний шлях або Google Drive URL |
 | `--files` | optional | всі рекурсивно | Фільтр файлів (див. нижче) |
 | `--limit` | optional | без ліміту | Максимум спроб обробки; файли, що лише пропускаються (вже в БД без `--rewrite`), у ліміт не входять |
@@ -116,12 +117,12 @@ python indexer.py /mnt/scans --verbose
 tail -f indexer.log
 
 # Швидка статистика з бази
-sqlite3 indexer.db "SELECT COUNT(*) || ' сканів, ' || (SELECT COUNT(*) FROM persons) || ' осіб' FROM scans"
+sqlite3 data/volyn.db "SELECT COUNT(*) || ' сканів, ' || (SELECT COUNT(*) FROM persons) || ' осіб' FROM scans"
 ```
 
 ## Структура бази даних
 
-`indexer.db` — SQLite файл поряд зі скриптом, створюється автоматично.
+Файл SQLite задається першим аргументом `dbname` (відносні шляхи — у `data/`, типово з суфіксом `.db`), каталог і файл створюються автоматично.
 
 ```sql
 scans:   id, folder, file, number, processed_at

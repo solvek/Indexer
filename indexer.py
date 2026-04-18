@@ -3,14 +3,15 @@
 Індексатор - автоматична обробка сканів архівних документів через ШІ.
 
 Використання:
-  python indexer.py /path/to/scans [опції]
-  python indexer.py https://drive.google.com/drive/folders/ID [опції]
+  python indexer.py DBNAME /path/to/scans [опції]
+  python indexer.py DBNAME https://drive.google.com/drive/folders/ID [опції]
 """
 import argparse
 import logging
 import os
 import sys
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -40,6 +41,19 @@ def setup_logging(verbose: bool = False, log_file: str = "indexer.log"):
 #  Основна логіка                                                     #
 # ------------------------------------------------------------------ #
 
+def _sqlite_db_path(s: str) -> Path:
+    """Ім'я/шлях до БД; відносні шляхи (крім уже під data/) — у каталозі data/; без розширення — .db"""
+    raw = s.strip()
+    if not raw:
+        raise argparse.ArgumentTypeError("dbname не може бути порожнім")
+    p = Path(raw)
+    if p.suffix == "":
+        p = p.with_suffix(".db")
+    if not p.is_absolute() and (not p.parts or p.parts[0] != "data"):
+        p = Path("data") / p
+    return p
+
+
 def main():
     default_model = os.environ.get("DEFAULT_MODEL", "gemini-2.0-flash-lite")
 
@@ -50,31 +64,39 @@ def main():
         epilog="""
 Приклади:
   # Локальна папка, всі файли рекурсивно
-  python indexer.py /mnt/scans
+  python indexer.py volyn /mnt/scans
 
   # Конкретний файл
-  python indexer.py /mnt/scans --files scan_00023.jpg
+  python indexer.py volyn /mnt/scans --files scan_00023.jpg
 
   # Підпапка (не рекурсивно)
-  python indexer.py /mnt/scans --files "Метрики/"
+  python indexer.py volyn /mnt/scans --files "Метрики/"
 
   # Підпапка рекурсивно
-  python indexer.py /mnt/scans --files "Архів/**"
+  python indexer.py volyn /mnt/scans --files "Архів/**"
 
   # Google Drive: обробити до 10 нових файлів (уже в БД не входять у ліміт; за замовч. без перезапису)
-  python indexer.py https://drive.google.com/drive/folders/ID --limit 10
+  python indexer.py volyn https://drive.google.com/drive/folders/ID --limit 10
 
   # Примусово перезаписати вже проіндексовані скани
-  python indexer.py /mnt/scans --rewrite
+  python indexer.py volyn /mnt/scans --rewrite
 
   # Довільний опис для моделі (як раніше)
-  python indexer.py /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
+  python indexer.py volyn /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
 
   # Специфіка запуску з файлу prompts/<ім'я>.txt (без розширення в аргументі)
-  python indexer.py /mnt/scans --description volyn_darts_marriages
+  python indexer.py volyn /mnt/scans --description volyn_darts_marriages
         """,
     )
 
+    parser.add_argument(
+        "dbname",
+        type=_sqlite_db_path,
+        help=(
+            "Ім'я або шлях до SQLite; відносні імена зберігаються в data/ "
+            "(якщо без розширення — додається .db; абсолютний шлях — без змін)"
+        ),
+    )
     parser.add_argument(
         "source",
         help="Google Drive URL або локальний шлях до папки зі сканами",
@@ -137,6 +159,7 @@ def main():
     drive_key = os.environ.get("GOOGLE_DRIVE_API_KEY", "").strip() or None
 
     # Ініціалізація бази
+    db.set_database(args.dbname)
     db.init_db()
     log.info(f"База даних: {db.DB_FILE.resolve()}")
 

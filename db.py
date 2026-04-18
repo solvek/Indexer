@@ -9,6 +9,12 @@ from pathlib import Path
 DB_FILE = Path("indexer.db")
 
 
+def set_database(path: Path) -> None:
+    """Встановлює шлях до файлу SQLite (викликати перед init_db та іншими операціями)."""
+    global DB_FILE
+    DB_FILE = path
+
+
 def get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -18,6 +24,7 @@ def get_conn() -> sqlite3.Connection:
 
 def init_db():
     """Створює таблиці якщо їх немає."""
+    DB_FILE.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS scans (
