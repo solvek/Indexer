@@ -78,7 +78,7 @@ def main():
     )
     parser.add_argument(
         "--limit", type=int, default=None,
-        help="Максимальна кількість файлів для обробки",
+        help="Не більше N файлів з черги (порядок після сортування); діє і з --no-rewrite",
     )
     parser.add_argument(
         "--rewrite", action=argparse.BooleanOptionalAction, default=True,
@@ -136,21 +136,23 @@ def main():
         log.error(f"Не вдалось отримати список файлів: {e}")
         sys.exit(1)
 
-    total = len(entries)
-    log.info(f"Знайдено файлів: {total}")
+    total_found = len(entries)
+    if args.limit is not None:
+        entries = entries[: args.limit]
+    in_queue = len(entries)
+    log.info(
+        f"Знайдено файлів: {total_found}"
+        + (f", у черзі цього запуску: {in_queue}" if args.limit is not None else "")
+    )
 
-    if total == 0:
+    if in_queue == 0:
         log.warning("Немає файлів для обробки.")
         return
 
     processed = skipped = errors = 0
 
     for i, entry in enumerate(entries, 1):
-        if args.limit is not None and processed >= args.limit:
-            log.info(f"Досягнуто ліміт: {args.limit}")
-            break
-
-        label = f"[{i}/{total}] {entry.folder + '/' if entry.folder else ''}{entry.file}"
+        label = f"[{i}/{in_queue}] {entry.folder + '/' if entry.folder else ''}{entry.file}"
 
         already_done = db.is_processed(entry.folder, entry.file)
         if already_done and not args.rewrite:

@@ -32,8 +32,8 @@ def init_db():
             CREATE TABLE IF NOT EXISTS persons (
                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
                 scan_id  INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
-                name     TEXT,
                 surname  TEXT,
+                name     TEXT,
                 father   TEXT,
                 yob      INTEGER,
                 location TEXT
@@ -42,6 +42,42 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
             CREATE INDEX IF NOT EXISTS idx_persons_surname ON persons(surname);
         """)
+        _migrate_persons_name_surname_order(conn)
+
+
+def _migrate_persons_name_surname_order(conn: sqlite3.Connection) -> None:
+    """Якщо таблиця persons ще у старому порядку (name, surname) — пересоздаємо з (surname, name)."""
+    rows = conn.execute("PRAGMA table_info(persons)").fetchall()
+    if not rows:
+        return
+    # cid -> name
+    cols = [r[1] for r in sorted(rows, key=lambda r: r[0])]
+    try:
+        i_name = cols.index("name")
+        i_surname = cols.index("surname")
+    except ValueError:
+        return
+    if i_surname < i_name:
+        return
+    conn.executescript("""
+        BEGIN;
+        CREATE TABLE persons__reorder (
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            scan_id  INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+            surname  TEXT,
+            name     TEXT,
+            father   TEXT,
+            yob      INTEGER,
+            location TEXT
+        );
+        INSERT INTO persons__reorder (id, scan_id, surname, name, father, yob, location)
+        SELECT id, scan_id, surname, name, father, yob, location FROM persons;
+        DROP TABLE persons;
+        ALTER TABLE persons__reorder RENAME TO persons;
+        CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
+        CREATE INDEX IF NOT EXISTS idx_persons_surname ON persons(surname);
+        COMMIT;
+    """)
 
 
 def is_processed(folder: str, file: str) -> bool:
@@ -72,13 +108,13 @@ def save_scan(folder: str, file: str, number: Optional[int], persons: List[dict]
         scan_id = cur.lastrowid
         if persons:
             conn.executemany(
-                """INSERT INTO persons (scan_id, name, surname, father, yob, location)
+                """INSERT INTO persons (scan_id, surname, name, father, yob, location)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 [
                     (
                         scan_id,
-                        p.get("name"),
                         p.get("surname"),
+                        p.get("name"),
                         p.get("father"),
                         p.get("yob"),
                         p.get("location"),

@@ -1,1 +1,4 @@
 .env
+indexer.db
+indexer.log
+__pycache__/
