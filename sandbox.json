@@ -1,0 +1,12 @@
+{
+  "networkPolicy": {
+    "default": "deny",
+    "allow": [
+      "generativelanguage.googleapis.com",
+      "www.googleapis.com",
+      "discovery.googleapis.com",
+      "*.googleapis.com",
+      "*.googleusercontent.com"
+    ]
+  }
+}
