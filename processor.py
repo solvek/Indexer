@@ -17,18 +17,18 @@ from google.genai import types
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-_PROMPT_FILE = _PROMPTS_DIR / "document_extraction.txt"
+_BASE_PROMPT_FILE = _PROMPTS_DIR / "base_prompt.txt"
 _prompt_template_cache: Optional[str] = None
 
-# Для --description: якщо значення збігається з цим шаблоном, шукаємо файл
-# prompts/<значення>.txt (специфіка запуску), інакше — довільний текст (як раніше).
-_RUN_SPEC_DESCRIPTION_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+# Для --extended-prompt: якщо значення збігається з цим шаблоном, шукаємо файл
+# prompts/<значення>.txt (розширений промпт), інакше — довільний текст.
+_EXTENDED_PROMPT_FILE_STEM_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def _load_prompt_template() -> str:
     global _prompt_template_cache
     if _prompt_template_cache is None:
-        _prompt_template_cache = _PROMPT_FILE.read_text(encoding="utf-8")
+        _prompt_template_cache = _BASE_PROMPT_FILE.read_text(encoding="utf-8")
     return _prompt_template_cache
 
 
@@ -51,23 +51,23 @@ def extract_number(filename: str) -> Optional[int]:
 
 
 # ------------------------------------------------------------------ #
-#  Промпт для моделі (текст у prompts/document_extraction.txt)        #
+#  Базовий промпт: prompts/base_prompt.txt; розширений — опційно (див. _build_prompt)  #
 # ------------------------------------------------------------------ #
 
 
-def _build_prompt(description: Optional[str]) -> str:
+def _build_prompt(extended_prompt: Optional[str]) -> str:
     extra = ""
-    if description:
-        desc = description.strip()
-        if desc:
-            if _RUN_SPEC_DESCRIPTION_RE.fullmatch(desc):
-                run_spec_path = (_PROMPTS_DIR / f"{desc}.txt").resolve()
-                if run_spec_path.is_file():
-                    extra = "\n" + run_spec_path.read_text(encoding="utf-8")
+    if extended_prompt:
+        raw = extended_prompt.strip()
+        if raw:
+            if _EXTENDED_PROMPT_FILE_STEM_RE.fullmatch(raw):
+                extended_path = (_PROMPTS_DIR / f"{raw}.txt").resolve()
+                if extended_path.is_file():
+                    extra = "\n" + extended_path.read_text(encoding="utf-8")
                 else:
-                    extra = f"\nДодатковий контекст: {desc}"
+                    extra = f"\nДодатковий контекст: {raw}"
             else:
-                extra = f"\nДодатковий контекст: {desc}"
+                extra = f"\nДодатковий контекст: {raw}"
     return _load_prompt_template().format(extra=extra)
 
 
@@ -218,7 +218,7 @@ def process_image(
     local_path: str,
     model_name: str,
     temperature: float,
-    description: Optional[str],
+    extended_prompt: Optional[str],
 ) -> list:
     """
     Відправляє зображення в Gemini і повертає список знайдених людей.
@@ -235,7 +235,7 @@ def process_image(
 
     contents = [
         types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-        _build_prompt(description),
+        _build_prompt(extended_prompt),
     ]
     config = types.GenerateContentConfig(
         temperature=temperature,

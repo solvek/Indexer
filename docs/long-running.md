@@ -11,7 +11,7 @@
 ```bash
 cd /шлях/до/Indexer
 source .venv/bin/activate
-nohup python indexer.py lutsk_marriages 'https://drive.google.com/drive/folders/FOLDER_ID?usp=drive_link' --description volyn_darts_marriages </dev/null >>nohup.out 2>&1 &
+nohup python indexer.py lutsk_marriages 'https://drive.google.com/drive/folders/FOLDER_ID?usp=drive_link' --extended-prompt volyn_darts_marriages </dev/null >>nohup.out 2>&1 &
 ```
 
 **Важливо:**

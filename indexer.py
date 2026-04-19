@@ -119,11 +119,11 @@ def main():
   # Примусово перезаписати вже проіндексовані скани
   python indexer.py volyn /mnt/scans --rewrite
 
-  # Довільний опис для моделі (як раніше)
-  python indexer.py volyn /mnt/scans --description "Метричні книги Київської губернії, 19 ст."
+  # Розширений промпт: довільний текст для моделі
+  python indexer.py volyn /mnt/scans --extended-prompt "Метричні книги Київської губернії, 19 ст."
 
-  # Специфіка запуску з файлу prompts/<ім'я>.txt (без розширення в аргументі)
-  python indexer.py volyn /mnt/scans --description volyn_darts_marriages
+  # Розширений промпт з файлу prompts/<ім'я>.txt (без розширення в аргументі)
+  python indexer.py volyn /mnt/scans --extended-prompt volyn_darts_marriages
         """,
     )
 
@@ -152,10 +152,14 @@ def main():
         help="Перезаписувати вже оброблені скани (за замовч.: --no-rewrite)",
     )
     parser.add_argument(
-        "--description", default=None,
+        "--extended-prompt",
+        "--description",
+        dest="extended_prompt",
+        default=None,
         help=(
-            "Контекст для моделі: довільний рядок АБО ім'я файлу без .txt з каталогу "
-            "prompts/ (лише латиниця, цифри, _ та -), наприклад volyn_darts_marriages"
+            "Розширений промпт (необов'язково): довільний рядок АБО ім'я файлу без .txt "
+            "з каталогу prompts/ (лише латиниця, цифри, _ та -), наприклад volyn_darts_marriages. "
+            "--description — застарілий псевдонім, збережено для сумісності"
         ),
     )
     parser.add_argument(
@@ -290,7 +294,7 @@ def main():
                 local_path = source.get_local_path(entry)
                 number = processor.extract_number(entry.file)
                 persons = processor.process_image(
-                    local_path, args.model, args.temperature, args.description
+                    local_path, args.model, args.temperature, args.extended_prompt
                 )
                 db.save_scan(entry.folder, entry.file, number, persons)
                 if args.csv:

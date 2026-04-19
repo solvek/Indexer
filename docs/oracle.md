@@ -36,7 +36,7 @@ pip install -r requirements.txt
 # Запуск скрипта
 
 ```bash
-nohup python indexer.py lutsk_marriages 'https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link' --description volyn_darts_marriages --request-delay 6.0</dev/null >>nohup.out 2>&1 &
+nohup python indexer.py lutsk_marriages 'https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link' --extended-prompt volyn_darts_marriages --request-delay 6.0</dev/null >>nohup.out 2>&1 &
 ```
 
 # Перегляд логів
