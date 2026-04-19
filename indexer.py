@@ -309,10 +309,10 @@ def main():
             try:
                 local_path = source.get_local_path(entry)
                 number = processor.extract_number(entry.file)
-                persons = processor.process_image(
+                persons, scan_meta = processor.process_image(
                     local_path, args.model, args.temperature, args.extended_prompt
                 )
-                db.save_scan(entry.folder, entry.file, number, persons)
+                db.save_scan(entry.folder, entry.file, number, persons, scan_meta)
                 if args.csv:
                     csv_new_rows.extend(
                         _csv_rows_for_scan(entry.folder, entry.file, number, persons)

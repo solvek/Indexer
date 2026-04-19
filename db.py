@@ -184,13 +184,25 @@ def _encode_person_meta(person: dict) -> Optional[str]:
     return None
 
 
-def save_scan(folder: str, file: str, number: Optional[int], persons: List[dict]):
-    """Зберігає скан і список людей."""
+def _encode_scan_meta(scan_meta: Optional[dict]) -> Optional[str]:
+    if not scan_meta:
+        return None
+    return json.dumps(scan_meta, ensure_ascii=False)
+
+
+def save_scan(
+    folder: str,
+    file: str,
+    number: Optional[int],
+    persons: List[dict],
+    scan_meta: Optional[dict] = None,
+):
+    """Зберігає скан і список людей. scan_meta — JSON-поля для колонки scans.meta."""
     now = datetime.now(timezone.utc).isoformat()
     with get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO scans (folder, file, number, processed_at) VALUES (?, ?, ?, ?)",
-            (folder, file, number, now),
+            "INSERT INTO scans (folder, file, number, processed_at, meta) VALUES (?, ?, ?, ?, ?)",
+            (folder, file, number, now, _encode_scan_meta(scan_meta)),
         )
         scan_id = cur.lastrowid
         if persons:
