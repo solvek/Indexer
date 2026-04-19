@@ -48,11 +48,13 @@ tail -f indexer.log
 # Відправка оновлених баз в GitHub
 
 ```bash
+git pull
+git add .
 git commit -m "databases update"
 git push
 ```
 
-Тоді ввести логін (емайл від GitHub) і в якості пароля ввести [Personal access token](https://github.com/settings/personal-access-tokens) з GitHub
+Тоді ввести логін (емайл від GitHub) і в якості пароля ввести [Personal access token](https://github.com/settings/personal-access-tokens) з GitHub (Github Indexer Token)
 
 # Вибрати всі записи з бази
 
