@@ -48,8 +48,11 @@ tail -f indexer.log
 # Відправка оновлених баз в GitHub
 
 ```bash
-tail -f indexer.log
+git commit -m "databases update"
+git push
 ```
+
+Тоді ввести логін (емайл від GitHub) і в якості пароля ввести [Personal access token](https://github.com/settings/personal-access-tokens) з GitHub
 
 # Вибрати всі записи з бази
 
@@ -57,4 +60,16 @@ tail -f indexer.log
 SELECT s.folder, s.number, p.surname, p.name, p.father, p.yob, p.location, s.file
 FROM persons p JOIN scans s ON s.id = p.scan_id
 ORDER BY p.surname
+```
+
+# Активні процеси nohub
+
+```bash
+pgrep -af indexer
+```
+
+# Прибити процес
+
+```bash
+kill -9 PID
 ```
