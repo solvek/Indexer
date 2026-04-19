@@ -41,6 +41,9 @@ python indexer.py my_project /шлях/до/сканів --limit 20 --descriptio
 
 # Один файл у підпапці
 python indexer.py my_project /шлях/до/сканів --files "Справа_12/scan_001.jpg"
+
+# З опційним експортом у CSV (див. docs/csv-export.md)
+python indexer.py my_project /шлях/до/сканів --csv
 ```
 
 Повні приклади (у тому числі Google Drive, фільтр `--files`) — у [використанні](docs/usage.md).
@@ -57,12 +60,14 @@ python indexer.py my_project /шлях/до/сканів --files "Справа_1
 | `--description` | — | Текстовий контекст для моделі (регіон, тип книги) |
 | `--model` | з `.env` | Модель Gemini |
 | `--temperature` | `0.1` | Температура 0.0–1.0 |
+| `--csv` | вимкнено | Експорт у CSV; деталі — [docs/csv-export.md](docs/csv-export.md) |
 | `--verbose` | вимкнено | Детальні логи |
 
-## Документація
+## Розширена документація
 
 - [Встановлення: Python, залежності, ключі, Google Drive](docs/installation.md)
 - [Використання: приклади, параметри, фільтр файлів](docs/usage.md)
+- [Експорт у CSV (`--csv`)](docs/csv-export.md)
 - [Моніторинг: логи та статистика в базі](docs/monitoring.md)
 - [Довгий запуск після виходу з SSH (nohup, tmux)](docs/long-running.md)
 - [Структура бази даних](docs/database.md)

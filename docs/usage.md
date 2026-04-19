@@ -56,6 +56,7 @@ python indexer.py volyn /mnt/scans --verbose
 | `--model` | optional | з `.env` | Назва моделі Gemini |
 | `--temperature` | optional | `0.1` | Температура 0.0–1.0 |
 | `--verbose` | flag | — | Детальні логи |
+| `--csv` | flag | — | Допис у `out/<ім'я_бд>.csv` рядків зі сканів цього запуску; повна поведінка — у [експорті CSV](csv-export.md) |
 
 ## Фільтр --files
 

@@ -7,6 +7,7 @@
   python indexer.py DBNAME https://drive.google.com/drive/folders/ID [опції]
 """
 import argparse
+import csv
 import logging
 import os
 import sys
@@ -40,6 +41,43 @@ def setup_logging(verbose: bool = False, log_file: str = "indexer.log"):
 # ------------------------------------------------------------------ #
 #  Основна логіка                                                     #
 # ------------------------------------------------------------------ #
+
+_CSV_HEADER = ["Папка", "Файл", "Скан", "Прізвище", "Ім'я", "Рік народження"]
+
+
+def _csv_rows_for_scan(folder: str, file: str, number, persons: list) -> list:
+    """Один рядок на особу; скан без осіб — один рядок з порожніми полями особи."""
+    n = "" if number is None else number
+    if not persons:
+        return [[folder, file, n, "", "", ""]]
+    rows = []
+    for p in persons:
+        yob = p.get("yob")
+        rows.append(
+            [
+                folder,
+                file,
+                n,
+                p.get("surname") or "",
+                p.get("name") or "",
+                "" if yob is None else yob,
+            ]
+        )
+    return rows
+
+
+def _append_csv_rows(path: Path, rows: list) -> None:
+    """Додає рядки в кінець файлу; заголовок — лише якщо файл новий або порожній."""
+    if not rows:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    new_file = not path.exists() or path.stat().st_size == 0
+    with open(path, "a", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        if new_file:
+            w.writerow(_CSV_HEADER)
+        w.writerows(rows)
+
 
 def _sqlite_db_path(s: str) -> Path:
     """Ім'я/шлях до БД; відносні шляхи (крім уже під data/) — у каталозі data/; без розширення — .db"""
@@ -142,6 +180,14 @@ def main():
             "при серії сканів; 0 = без паузи (default: 0)"
         ),
     )
+    parser.add_argument(
+        "--csv",
+        action="store_true",
+        help=(
+            "Додати у out/<ім'я_бд>.csv лише рядки зі сканів, успішно оброблених у цьому запуску "
+            "(допис у кінець; заголовок — якщо файлу ще не було)"
+        ),
+    )
 
     args = parser.parse_args()
     if args.request_delay < 0:
@@ -207,69 +253,73 @@ def main():
         )
     )
 
-    if total_found == 0:
-        log.warning("Немає файлів для обробки.")
-        return
-
     processed = skipped = errors = 0
     work_num = 0  # скільки файлів реально пішли в обробку (не пропуск)
+    csv_new_rows: list = []
 
-    for i, entry in enumerate(entries, 1):
-        rel = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
+    if total_found == 0:
+        log.warning("Немає файлів для обробки.")
+    else:
+        for i, entry in enumerate(entries, 1):
+            rel = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
 
-        already_done = db.is_processed(entry.folder, entry.file)
-        if already_done and not args.rewrite:
-            log.info(f"ПРОПУСК (вже оброблено): [{i}/{total_found}] {rel}")
-            skipped += 1
-            continue
+            already_done = db.is_processed(entry.folder, entry.file)
+            if already_done and not args.rewrite:
+                log.info(f"ПРОПУСК (вже оброблено): [{i}/{total_found}] {rel}")
+                skipped += 1
+                continue
 
-        if args.limit is not None and work_num >= args.limit:
-            break
+            if args.limit is not None and work_num >= args.limit:
+                break
 
-        work_num += 1
-        label = (
-            f"[{work_num}/{args.limit}] {rel}"
-            if args.limit is not None
-            else f"[{i}/{total_found}] {rel}"
-        )
-
-        if already_done and args.rewrite:
-            db.delete_scan(entry.folder, entry.file)
-            log.debug(f"Видалено попередній запис: {label}")
-
-        log.info(f"Обробка: {label}")
-
-        local_path = None
-        try:
-            local_path = source.get_local_path(entry)
-            number = processor.extract_number(entry.file)
-            persons = processor.process_image(
-                local_path, args.model, args.temperature, args.description
+            work_num += 1
+            label = (
+                f"[{work_num}/{args.limit}] {rel}"
+                if args.limit is not None
+                else f"[{i}/{total_found}] {rel}"
             )
-            db.save_scan(entry.folder, entry.file, number, persons)
 
-            names_preview = ", ".join(
-                f"{p.get('surname', '?')} {p.get('name', '')}".strip()
-                for p in persons[:3]
-            )
-            if len(persons) > 3:
-                names_preview += f" ... (+{len(persons) - 3})"
+            if already_done and args.rewrite:
+                db.delete_scan(entry.folder, entry.file)
+                log.debug(f"Видалено попередній запис: {label}")
 
-            log.info(f"  → {len(persons)} осіб: {names_preview or '—'}")
-            processed += 1
+            log.info(f"Обробка: {label}")
 
-        except Exception as e:
-            log.error(f"  ПОМИЛКА: {e}")
-            if args.verbose:
-                log.exception("Деталі помилки:")
-            errors += 1
+            local_path = None
+            try:
+                local_path = source.get_local_path(entry)
+                number = processor.extract_number(entry.file)
+                persons = processor.process_image(
+                    local_path, args.model, args.temperature, args.description
+                )
+                db.save_scan(entry.folder, entry.file, number, persons)
+                if args.csv:
+                    csv_new_rows.extend(
+                        _csv_rows_for_scan(entry.folder, entry.file, number, persons)
+                    )
 
-        finally:
-            if local_path:
-                source.cleanup(entry)
+                names_preview = ", ".join(
+                    f"{p.get('surname', '?')} {p.get('name', '')}".strip()
+                    for p in persons[:3]
+                )
+                if len(persons) > 3:
+                    names_preview += f" ... (+{len(persons) - 3})"
 
-        if args.request_delay > 0:
-            time.sleep(args.request_delay)
+                log.info(f"  → {len(persons)} осіб: {names_preview or '—'}")
+                processed += 1
+
+            except Exception as e:
+                log.error(f"  ПОМИЛКА: {e}")
+                if args.verbose:
+                    log.exception("Деталі помилки:")
+                errors += 1
+
+            finally:
+                if local_path:
+                    source.cleanup(entry)
+
+            if args.request_delay > 0:
+                time.sleep(args.request_delay)
 
     log.info(
         f"\n{'='*50}\n"
@@ -279,6 +329,16 @@ def main():
         f"  Помилок:    {errors}\n"
         f"{'='*50}"
     )
+
+    if args.csv:
+        csv_path = Path("out") / f"{args.dbname.stem}.csv"
+        if csv_new_rows:
+            _append_csv_rows(csv_path, csv_new_rows)
+            log.info(
+                f"CSV: додано {len(csv_new_rows)} рядків → {csv_path.resolve()}"
+            )
+        else:
+            log.info("CSV: нових успішних сканів немає, файл не змінювався")
 
 
 if __name__ == "__main__":
