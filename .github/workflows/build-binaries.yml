@@ -8,8 +8,9 @@ on:
     tags:
       - "v*"
 
+# write — щоб job release міг створити Release і завантажити assets (GITHUB_TOKEN).
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -53,3 +54,57 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: dist/indexer.exe
+
+  # Лише при push тега v* (не при workflow_dispatch з гілки): три артефакти → один GitHub Release.
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Linux binary
+        uses: actions/download-artifact@v8
+        with:
+          name: indexer-linux-x64
+          path: dl/linux
+      - name: Download Windows binary
+        uses: actions/download-artifact@v8
+        with:
+          name: indexer-windows-x64
+          path: dl/win
+      - name: Download macOS binary
+        uses: actions/download-artifact@v8
+        with:
+          name: indexer-macos
+          path: dl/mac
+
+      - name: Attach binaries to Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          TAG="${GITHUB_REF_NAME}"
+          REPO="${{ github.repository }}"
+          LINUX_SRC=$(find dl/linux -type f -name indexer | head -1)
+          WIN_SRC=$(find dl/win -type f -name 'indexer.exe' | head -1)
+          MAC_SRC=$(find dl/mac -type f -name indexer | head -1)
+          test -n "$LINUX_SRC" && test -f "$LINUX_SRC"
+          test -n "$WIN_SRC" && test -f "$WIN_SRC"
+          test -n "$MAC_SRC" && test -f "$MAC_SRC"
+          OUT_LINUX="indexer-${TAG}-linux-x86_64"
+          OUT_WIN="indexer-${TAG}-windows-x86_64.exe"
+          OUT_MAC="indexer-${TAG}-macos"
+          cp "$LINUX_SRC" "$OUT_LINUX"
+          cp "$WIN_SRC" "$OUT_WIN"
+          cp "$MAC_SRC" "$OUT_MAC"
+          chmod +x "$OUT_LINUX" "$OUT_MAC" || true
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$OUT_LINUX" "$OUT_WIN" "$OUT_MAC" \
+              --repo "$REPO" --clobber
+          else
+            gh release create "$TAG" "$OUT_LINUX" "$OUT_WIN" "$OUT_MAC" \
+              --repo "$REPO" \
+              --title "Indexer ${TAG}" \
+              --generate-notes \
+              --latest
+          fi
