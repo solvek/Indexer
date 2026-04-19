@@ -30,7 +30,7 @@ cp sample.env .env
 python indexer.py DBNAME SOURCE [опції]
 ```
 
-`DBNAME` — ім’я або шлях до SQLite (відносні імена потрапляють у `data/`, за потреби додається `.db`). `SOURCE` — **локальна** папка зі сканами.
+`DBNAME` — ім’я або шлях до SQLite (відносні імена потрапляють у `data/`, за потреби додається `.db`). `SOURCE` — локальна папка зі сканами, або урл на папку в Google Drive.
 
 ```bash
 # Уся папка рекурсивно (база: data/my_project.db)
