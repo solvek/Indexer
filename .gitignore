@@ -6,5 +6,9 @@ client_secret*.json
 *-sa.json
 keys/
 .venv/
+.venv-build/
 nohup.out
 out/
+build/
+dist/
+*.spec.bak
