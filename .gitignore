@@ -5,3 +5,5 @@ __pycache__/
 client_secret*.json
 *-sa.json
 keys/
+.venv/
+nohup.out
