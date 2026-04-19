@@ -1,7 +1,6 @@
 .env
 indexer.log
 __pycache__/
-data/
 # Google OAuth / SA (якщо випадково в корінь репо; краще — ключі не в репо)
 client_secret*.json
 *-sa.json
