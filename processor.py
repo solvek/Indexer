@@ -222,7 +222,8 @@ def process_image(
 ) -> list:
     """
     Відправляє зображення в Gemini і повертає список знайдених людей.
-    Кожна особа — словник з ключами: name, surname, father, yob, location.
+    Кожна особа — словник з ключами: name, surname, meta (dict JSON-полів:
+    father, yob, location згідно з промптом).
     """
     if _client is None:
         raise RuntimeError("Gemini клієнт не ініціалізовано. Викличте init_client() спочатку.")
@@ -303,9 +304,11 @@ def _parse_response(text: str) -> list:
         persons.append({
             "name": _clean_str(item.get("name")),
             "surname": _clean_str(item.get("surname")),
-            "father": _clean_str(item.get("father")),
-            "yob": _clean_int(item.get("yob")),
-            "location": _clean_str(item.get("location")),
+            "meta": {
+                "father": _clean_str(item.get("father")),
+                "yob": _clean_int(item.get("yob")),
+                "location": _clean_str(item.get("location")),
+            },
         })
     return persons
 

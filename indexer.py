@@ -8,6 +8,7 @@
 """
 import argparse
 import csv
+import json
 import logging
 import os
 import sys
@@ -45,6 +46,21 @@ def setup_logging(verbose: bool = False, log_file: str = "indexer.log"):
 _CSV_HEADER = ["Папка", "Файл", "Скан", "Прізвище", "Ім'я", "Рік народження"]
 
 
+def _yob_from_person_meta(person: dict):
+    """Рік народження з persons.meta (dict або JSON-рядок)."""
+    m = person.get("meta")
+    if m is None:
+        return None
+    if isinstance(m, dict):
+        return m.get("yob")
+    if isinstance(m, str):
+        try:
+            return json.loads(m).get("yob")
+        except (json.JSONDecodeError, TypeError):
+            return None
+    return None
+
+
 def _csv_rows_for_scan(folder: str, file: str, number, persons: list) -> list:
     """Один рядок на особу; скан без осіб — один рядок з порожніми полями особи."""
     n = "" if number is None else number
@@ -52,7 +68,7 @@ def _csv_rows_for_scan(folder: str, file: str, number, persons: list) -> list:
         return [[folder, file, n, "", "", ""]]
     rows = []
     for p in persons:
-        yob = p.get("yob")
+        yob = _yob_from_person_meta(p)
         rows.append(
             [
                 folder,

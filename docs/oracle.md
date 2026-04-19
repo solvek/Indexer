@@ -59,7 +59,8 @@ git push
 # Вибрати всі записи з бази
 
 ```sql
-SELECT s.folder, s.number, p.surname, p.name, p.father, p.yob, p.location, s.file
+SELECT s.folder, s.number, p.surname, p.name,
+       s.file, s.meta, p.meta
 FROM persons p JOIN scans s ON s.id = p.scan_id
 ORDER BY p.surname
 ```

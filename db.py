@@ -1,6 +1,7 @@
 """
 Шар роботи з базою даних SQLite.
 """
+import json
 import sqlite3
 from typing import List, Optional
 from datetime import datetime, timezone
@@ -33,6 +34,7 @@ def init_db():
                 file         TEXT    NOT NULL,
                 number       INTEGER,
                 processed_at TEXT    NOT NULL,
+                meta         TEXT,
                 UNIQUE(folder, file)
             );
 
@@ -41,15 +43,80 @@ def init_db():
                 scan_id  INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
                 surname  TEXT,
                 name     TEXT,
-                father   TEXT,
-                yob      INTEGER,
-                location TEXT
+                meta     TEXT
             );
 
             CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
             CREATE INDEX IF NOT EXISTS idx_persons_surname ON persons(surname);
         """)
+        _migrate_add_scans_meta_column(conn)
         _migrate_persons_name_surname_order(conn)
+        _migrate_persons_legacy_columns_to_meta(conn)
+
+
+def _table_columns(conn: sqlite3.Connection, table: str) -> List[str]:
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    return [str(r[1]) for r in sorted(rows, key=lambda r: r[0])]
+
+
+def _migrate_add_scans_meta_column(conn: sqlite3.Connection) -> None:
+    if "meta" not in _table_columns(conn, "scans"):
+        conn.execute("ALTER TABLE scans ADD COLUMN meta TEXT")
+
+
+def _migrate_persons_legacy_columns_to_meta(conn: sqlite3.Connection) -> None:
+    """
+    Старі БД: father, yob, location → JSON у persons.meta; колонки видаляються.
+    Нові БД вже мають лише meta.
+    """
+    cols = _table_columns(conn, "persons")
+    if "father" not in cols:
+        if "meta" not in cols:
+            conn.execute("ALTER TABLE persons ADD COLUMN meta TEXT")
+        return
+
+    if "meta" not in cols:
+        conn.execute("ALTER TABLE persons ADD COLUMN meta TEXT")
+
+    conn.execute(
+        """
+        UPDATE persons
+        SET meta = json_object(
+            'father', father,
+            'yob', yob,
+            'location', location
+        )
+        WHERE meta IS NULL
+        """
+    )
+
+    _drop_person_legacy_columns(conn)
+
+
+def _drop_person_legacy_columns(conn: sqlite3.Connection) -> None:
+    """Видаляє father, yob, location; при відсутності DROP COLUMN — пересоздання таблиці."""
+    try:
+        conn.execute("ALTER TABLE persons DROP COLUMN father")
+        conn.execute("ALTER TABLE persons DROP COLUMN yob")
+        conn.execute("ALTER TABLE persons DROP COLUMN location")
+    except sqlite3.OperationalError:
+        conn.executescript("""
+            BEGIN;
+            CREATE TABLE persons__meta (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                scan_id  INTEGER NOT NULL REFERENCES scans(id) ON DELETE CASCADE,
+                surname  TEXT,
+                name     TEXT,
+                meta     TEXT
+            );
+            INSERT INTO persons__meta (id, scan_id, surname, name, meta)
+            SELECT id, scan_id, surname, name, meta FROM persons;
+            DROP TABLE persons;
+            ALTER TABLE persons__meta RENAME TO persons;
+            CREATE INDEX IF NOT EXISTS idx_persons_scan ON persons(scan_id);
+            CREATE INDEX IF NOT EXISTS idx_persons_surname ON persons(surname);
+            COMMIT;
+        """)
 
 
 def _migrate_persons_name_surname_order(conn: sqlite3.Connection) -> None:
@@ -104,6 +171,19 @@ def delete_scan(folder: str, file: str):
         )
 
 
+def _encode_person_meta(person: dict) -> Optional[str]:
+    """Серіалізує persons.meta у JSON для SQLite TEXT."""
+    m = person.get("meta")
+    if m is None:
+        return None
+    if isinstance(m, str):
+        s = m.strip()
+        return s if s else None
+    if isinstance(m, dict):
+        return json.dumps(m, ensure_ascii=False)
+    return None
+
+
 def save_scan(folder: str, file: str, number: Optional[int], persons: List[dict]):
     """Зберігає скан і список людей."""
     now = datetime.now(timezone.utc).isoformat()
@@ -115,16 +195,14 @@ def save_scan(folder: str, file: str, number: Optional[int], persons: List[dict]
         scan_id = cur.lastrowid
         if persons:
             conn.executemany(
-                """INSERT INTO persons (scan_id, surname, name, father, yob, location)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
+                """INSERT INTO persons (scan_id, surname, name, meta)
+                   VALUES (?, ?, ?, ?)""",
                 [
                     (
                         scan_id,
                         p.get("surname"),
                         p.get("name"),
-                        p.get("father"),
-                        p.get("yob"),
-                        p.get("location"),
+                        _encode_person_meta(p),
                     )
                     for p in persons
                 ],
