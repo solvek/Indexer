@@ -36,7 +36,7 @@ pip install -r requirements.txt
 # Запуск скрипта
 
 ```bash
-nohup python indexer.py volodymyr_births https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link --extended-prompt volyn_darts_births --request-delay 20</dev/null >>nohup.out 2>&1 &
+nohup python indexer.py volodymyr_births "https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link" --extended-prompt volyn_darts_births --request-delay 20 </dev/null >>nohup.out 2>&1 &
 ```
 
 # Перегляд логів
@@ -76,3 +76,4 @@ pgrep -af indexer
 ```bash
 kill -9 PID
 ```
+
