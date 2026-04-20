@@ -18,6 +18,8 @@
   • "birth_place" — місце народження, сучасна українська; інакше null.
   • "marriage_ordinal" — який це шлюб за рахунком для цієї особи (1, 2, …); інакше null.
   • "children_count" — кількість дітей у акті (ціле); якщо немає або не згадується — 0.
+  • "etnicity" - графа національність
+  • "occupation" - професія чи заняття
 
 Не брати прізвища з підписів, приміток свідків тощо — лише з друкованих рядків таблиці.
 
@@ -40,7 +42,9 @@
         "birth_date": null,
         "surname_after_marriage": null,
         "marriage_ordinal": null,
-        "children_count": 0
+        "children_count": 0,
+        "etnicity": "українець",
+        "occupation": "Домогосподарка"
       }
     }
   ]
