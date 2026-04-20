@@ -17,7 +17,7 @@ from google.genai import types
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
-_BASE_PROMPT_FILE = _PROMPTS_DIR / "base_prompt.txt"
+_BASE_PROMPT_FILE = _PROMPTS_DIR / "_base.txt"
 _prompt_template_cache: Optional[str] = None
 
 # Без --extended-prompt: один об'єкт scan + persons; з розширеним — зазвичай масив осіб (див. текст).
@@ -98,7 +98,7 @@ def extract_number(filename: str) -> Optional[int]:
 
 
 # ------------------------------------------------------------------ #
-#  Базовий промпт: prompts/base_prompt.txt; розширений — опційно (див. _build_prompt)  #
+#  Базовий промпт: prompts/_base.txt; розширений — опційно (див. _build_prompt)  #
 # ------------------------------------------------------------------ #
 
 

@@ -6,8 +6,9 @@
   • "name" — ім'я, сучасна українська.
 
 Вкладений об'єкт "meta" у "scan" (для всього скану):
-  • "marriage_date" — дата шлюбу лише **ISO 8601** (YYYY-MM-DD); інакше null.
-  • "marriage_place" — місце реєстрації шлюбу; інакше null.
+  • "record" — номер акту
+  • "marriage_date" — дата шлюбу лише **ISO 8601** (YYYY-MM-DD); інакше null
+  • "marriage_place" — місце реєстрації шлюбу; інакше null
 
 Усі інші відомості про особу — всередині вкладеного об'єкта "meta":
   • "surname_after_marriage" — прізвище після шлюбу лише з офіційного рядка «Прізвище після шлюбу»;
@@ -27,6 +28,7 @@
 {
   "scan": {
     "meta": {
+      "record": 34,
       "marriage_date": null,
       "marriage_place": null
     }
