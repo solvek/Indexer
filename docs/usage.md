@@ -55,8 +55,8 @@ python indexer.py volyn /mnt/scans --verbose
 | `--extended-prompt` | optional | — | Розширений промпт: довільний текст або ім’я `prompts/<ім’я>.txt` — [деталі](prompts.md) |
 | `--model` | optional | з `.env` | Назва моделі Gemini |
 | `--temperature` | optional | `0.1` | Температура 0.0–1.0 |
-| `--verbose` | flag | — | Детальні логи |
 | `--csv` | flag | — | Допис у `out/<ім'я_бд>.csv` рядків зі сканів цього запуску; повна поведінка — у [експорті CSV](csv-export.md) |
+| `--verbose` | flag | — | Детальні логи |
 
 ## Фільтр --files
 

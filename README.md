@@ -1,6 +1,6 @@
 # Індексатор архівних документів
 
-Програма проходить папку зі сканами (фото сторінок метричних книг, актів тощо), відправляє їх у Google Gemini і зберігає знайдені прізвища, імена та роки в **локальну базу** на вашому комп’ютері. Окремо встановлювати Python **не обов’язково** — є готові файли під Windows, Linux і macOS.
+Програма проходить папку зі сканами (фото сторінок метричних книг, актів тощо), відправляє їх у Google Gemini і зберігає знайдені прізвища, імена та роки в **локальну базу** на вашому комп’ютері. Є готові файли під Windows, Linux і macOS.
 
 ---
 
@@ -133,16 +133,16 @@ cd $HOME\Desktop\Indexer
 ./indexer-v0.2-linux-x86_64 my_project /шлях/до/сканів --csv
 ```
 
-**Докладніші повідомлення в терміналі:**
-
-```bash
-./indexer-v0.2-linux-x86_64 my_project /шлях/до/сканів --verbose
-```
-
 **Кілька опцій разом:**
 
 ```bash
 ./indexer-v0.2-linux-x86_64 my_project /шлях/до/сканів --limit 10 --csv --verbose
+```
+
+**Докладніші повідомлення в терміналі:**
+
+```bash
+./indexer-v0.2-linux-x86_64 my_project /шлях/до/сканів --verbose
 ```
 
 На Windows у всіх цих прикладах замініть початок рядка на `.\indexer-v0.2-windows-x86_64.exe` (свою версію з Release) і шлях до папки пишіть як `C:\...`.
@@ -162,18 +162,29 @@ cd $HOME\Desktop\Indexer
 | `--model` | з `.env` | Інша модель Gemini, ніж у `.env` |
 | `--temperature` | `0.1` | «Креативність» відповіді моделі від 0 до 1 |
 | `--csv` | вимкнено | Експорт у CSV — [опис](docs/csv-export.md) |
-| `--verbose` | вимкнено | Більше повідомлень у термінал |
 | `--request-delay` | `0` | Пауза в секундах після кожного звернення до моделі (рідко потрібно при великій кількості сканів) |
+| `--verbose` | вимкнено | Більше повідомлень у термінал |
 
-Базовий і розширений промпти — [опис у `docs/prompts.md`](docs/prompts.md); короткі приклади CLI — [usage](docs/usage.md). Параметр **`--description`** залишено як псевдонім `--extended-prompt`.
+Базовий і розширений промпти — [опис у `docs/prompts.md`](docs/prompts.md); короткі приклади CLI — [usage](docs/usage.md).
 
 Змінні **Google Drive** у файлі `.env` потрібні лише якщо другим аргументом ви вказуєте посилання на папку в Drive, а не локальний шлях.
 
 ---
 
-## Запуск із вихідного коду (Python)
+## Зразки запитів до бази даних
 
-Якщо вам зручніше клонувати репозиторій і ставити залежності вручну: потрібен **Python 3.9+**, віртуальне середовище та `pip install -r requirements.txt`. Покроково — у [**встановленні**](docs/installation.md). Команда тоді виглядає так: `python indexer.py …` з тими самими аргументами та опціями, як у прикладах вище (замість імені бінарника).
+```sql
+SELECT s.folder, s.number, p.surname, p.name,
+       s.file, s.meta, p.meta
+FROM persons p JOIN scans s ON s.id = p.scan_id
+ORDER BY p.surname
+```
+
+```sql
+SELECT surname, name, json_extract(meta, '$.father') AS father, json_extract(meta, '$.yob') AS yob
+FROM persons
+ORDER BY surname
+```
 
 ---
 
