@@ -174,8 +174,8 @@ cd $HOME\Desktop\Indexer
 ## Зразки запитів до бази даних
 
 ```sql
-SELECT s.folder, s.number, p.surname, p.name,
-       s.file, s.meta, p.meta
+SELECT s.folder, s.number, p.surname, p.name, json_extract(p.meta, '$.father') AS father, json_extract(p.meta, '$.yob') AS yob,
+      p.meta, s.file, s.meta
 FROM persons p JOIN scans s ON s.id = p.scan_id
 ORDER BY p.surname
 ```
