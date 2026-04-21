@@ -12,3 +12,5 @@ out/
 build/
 dist/
 *.spec.bak
+# Локальні БД / дані (не в репо)
+data/
