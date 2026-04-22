@@ -197,6 +197,7 @@ ORDER BY surname
 - [Моніторинг і логи](docs/monitoring.md)
 - [Довгий запуск (nohup, tmux)](docs/long-running.md)
 - [Структура бази даних](docs/database.md)
+- [Майбутні функції (дискусійно)](docs/future-features-discussion.md)
 - [Формати зображень](docs/supported-formats.md)
 - [Розгортання на Oracle Cloud](docs/oracle.md)
 - [Як зробити новий Release з бінарниками на GitHub](docs/releases.md) — для тих, хто веде репозиторій
