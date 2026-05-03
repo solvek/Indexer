@@ -41,6 +41,13 @@ _DRIVE_MIME_TO_TMP_SUFFIX: Dict[str, str] = {
 _log = logging.getLogger(__name__)
 
 
+def _folder_column_value(folder_path: str, root_fallback: str) -> str:
+    """Останній сегмент відносного шляху папки (для БД/CSV); у корені — root_fallback."""
+    if folder_path:
+        return folder_path.rsplit("/", 1)[-1]
+    return root_fallback
+
+
 def _tmp_suffix_for_image_mime(mime: Optional[str]) -> str:
     if not mime:
         return ".jpg"
@@ -411,7 +418,7 @@ class DriveSource(Source):
 
     def get_local_path(self, entry: FileEntry) -> str:
         """Завантажує файл у тимчасову директорію і повертає шлях."""
-        file_id = self._id_map.get((entry.folder, entry.file)) or entry._drive_id
+        file_id = entry._drive_id or self._id_map.get((entry.folder, entry.file))
         if not file_id:
             raise RuntimeError(f"Невідомий Drive ID для {entry.folder}/{entry.file}")
 
@@ -600,7 +607,7 @@ class DriveSource(Source):
                         {
                             "id": t_id,
                             "name": t_name,
-                            "folder": folder_path or self._root_label,
+                            "folder": _folder_column_value(folder_path, self._root_label),
                             "mimeType": t_mime,
                         }
                     )
@@ -609,7 +616,7 @@ class DriveSource(Source):
                     {
                         "id": item["id"],
                         "name": item["name"],
-                        "folder": folder_path or self._root_label,
+                        "folder": _folder_column_value(folder_path, self._root_label),
                         "mimeType": m,
                     }
                 )
@@ -624,7 +631,7 @@ class DriveSource(Source):
             {
                 "id": i["id"],
                 "name": i["name"],
-                "folder": folder_path,
+                "folder": _folder_column_value(folder_path, self._root_label),
                 "mimeType": (i.get("mimeType") or ""),
             }
             for i in items
@@ -662,7 +669,7 @@ class DriveSource(Source):
             {
                 "id": meta["id"],
                 "name": filename,
-                "folder": folder_path or self._root_label,
+                "folder": _folder_column_value(folder_path, self._root_label),
                 "mimeType": (meta.get("mimeType") or ""),
             }
         ]

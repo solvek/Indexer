@@ -24,9 +24,10 @@ class LocalSource(Source):
             if p.suffix.lower() not in SUPPORTED_EXTENSIONS:
                 continue
             rel = p.relative_to(self.base)
-            folder = str(rel.parent) if str(rel.parent) != "." else ""
-            if not folder:
+            if str(rel.parent) == ".":
                 folder = self.base.name
+            else:
+                folder = rel.parent.name
             entries.append(
                 FileEntry(folder=folder, file=p.name, _local_path=str(p))
             )

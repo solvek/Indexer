@@ -27,7 +27,7 @@ def normalize_files_filter(files_filter: Optional[str]) -> Optional[str]:
 
 @dataclass
 class FileEntry:
-    folder: str           # відносний шлях від кореня джерела, "" якщо корінь
+    folder: str           # ім'я папки, де лежить файл (останній сегмент шляху); у корені джерела — ім'я base
     file: str             # ім'я файлу
     _local_path: Optional[str] = field(default=None, repr=False)  # для локального джерела
     _drive_id: Optional[str] = field(default=None, repr=False)    # для Google Drive
