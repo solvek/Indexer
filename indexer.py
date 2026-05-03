@@ -14,6 +14,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Any, Optional
 
 from dotenv import load_dotenv
 
@@ -44,6 +45,9 @@ def setup_logging(verbose: bool = False, log_file: str = "indexer.log"):
 # ------------------------------------------------------------------ #
 
 _CSV_HEADER = ["Папка", "Файл", "Скан", "Прізвище", "Ім'я", "Рік народження"]
+
+# Скільки проходів загалом (перший — з CLI; наступні при помилках — лише «не в БД», без ліміту).
+_MAX_INDEX_PASSES = 10
 
 
 def _yob_from_person_meta(person: dict):
@@ -93,6 +97,90 @@ def _append_csv_rows(path: Path, rows: list) -> None:
         if new_file:
             w.writerow(_CSV_HEADER)
         w.writerows(rows)
+
+
+def _run_index_pass(
+    entries: list,
+    source: Any,
+    args: argparse.Namespace,
+    *,
+    rewrite: bool,
+    limit: Optional[int],
+    log: logging.Logger,
+) -> tuple[int, int, int, list]:
+    """
+    Один прохід по списку entries. Повертає (processed, skipped, errors, csv_new_rows).
+    """
+    processed = skipped = errors = 0
+    work_num = 0
+    csv_new_rows: list = []
+    total_found = len(entries)
+
+    if total_found == 0:
+        return processed, skipped, errors, csv_new_rows
+
+    for i, entry in enumerate(entries, 1):
+        rel = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
+
+        already_done = db.is_processed(entry.folder, entry.file)
+        if already_done and not rewrite:
+            log.info(f"ПРОПУСК (вже оброблено): [{i}/{total_found}] {rel}")
+            skipped += 1
+            continue
+
+        if limit is not None and work_num >= limit:
+            break
+
+        work_num += 1
+        label = (
+            f"[{work_num}/{limit}] {rel}"
+            if limit is not None
+            else f"[{i}/{total_found}] {rel}"
+        )
+
+        if already_done and rewrite:
+            db.delete_scan(entry.folder, entry.file)
+            log.debug(f"Видалено попередній запис: {label}")
+
+        log.info(f"Обробка: {label}")
+
+        local_path = None
+        try:
+            local_path = source.get_local_path(entry)
+            number = processor.extract_number(entry.file)
+            persons, scan_meta = processor.process_image(
+                local_path, args.model, args.temperature, args.extended_prompt
+            )
+            db.save_scan(entry.folder, entry.file, number, persons, scan_meta)
+            if args.csv:
+                csv_new_rows.extend(
+                    _csv_rows_for_scan(entry.folder, entry.file, number, persons)
+                )
+
+            names_preview = ", ".join(
+                f"{p.get('surname', '?')} {p.get('name', '')}".strip()
+                for p in persons[:3]
+            )
+            if len(persons) > 3:
+                names_preview += f" ... (+{len(persons) - 3})"
+
+            log.info(f"  → {len(persons)} осіб: {names_preview or '—'}")
+            processed += 1
+
+        except Exception as e:
+            log.error(f"  ПОМИЛКА: {e}")
+            if args.verbose:
+                log.exception("Деталі помилки:")
+            errors += 1
+
+        finally:
+            if local_path:
+                source.cleanup(entry)
+
+        if args.request_delay > 0:
+            time.sleep(args.request_delay)
+
+    return processed, skipped, errors, csv_new_rows
 
 
 def _sqlite_db_path(s: str) -> Path:
@@ -274,72 +362,51 @@ def main():
     )
 
     processed = skipped = errors = 0
-    work_num = 0  # скільки файлів реально пішли в обробку (не пропуск)
     csv_new_rows: list = []
 
     if total_found == 0:
         log.warning("Немає файлів для обробки.")
     else:
-        for i, entry in enumerate(entries, 1):
-            rel = f"{entry.folder + '/' if entry.folder else ''}{entry.file}"
-
-            already_done = db.is_processed(entry.folder, entry.file)
-            if already_done and not args.rewrite:
-                log.info(f"ПРОПУСК (вже оброблено): [{i}/{total_found}] {rel}")
-                skipped += 1
-                continue
-
-            if args.limit is not None and work_num >= args.limit:
-                break
-
-            work_num += 1
-            label = (
-                f"[{work_num}/{args.limit}] {rel}"
-                if args.limit is not None
-                else f"[{i}/{total_found}] {rel}"
-            )
-
-            if already_done and args.rewrite:
-                db.delete_scan(entry.folder, entry.file)
-                log.debug(f"Видалено попередній запис: {label}")
-
-            log.info(f"Обробка: {label}")
-
-            local_path = None
-            try:
-                local_path = source.get_local_path(entry)
-                number = processor.extract_number(entry.file)
-                persons, scan_meta = processor.process_image(
-                    local_path, args.model, args.temperature, args.extended_prompt
+        current_entries = entries
+        for pass_num in range(1, _MAX_INDEX_PASSES + 1):
+            if pass_num > 1:
+                log.info(
+                    f"Прохід {pass_num}/{_MAX_INDEX_PASSES}: після попереднього залишились "
+                    "помилки — пропуск вже успішно оброблених сканів, ліміт знято"
                 )
-                db.save_scan(entry.folder, entry.file, number, persons, scan_meta)
-                if args.csv:
-                    csv_new_rows.extend(
-                        _csv_rows_for_scan(entry.folder, entry.file, number, persons)
+                try:
+                    current_entries = source.list_files(args.files)
+                except (ValueError, RuntimeError) as e:
+                    log.error(
+                        f"Не вдалось отримати список файлів для проходу {pass_num}: {e}"
                     )
+                    break
 
-                names_preview = ", ".join(
-                    f"{p.get('surname', '?')} {p.get('name', '')}".strip()
-                    for p in persons[:3]
+            p, s, e, rows = _run_index_pass(
+                current_entries,
+                source,
+                args,
+                rewrite=args.rewrite if pass_num == 1 else False,
+                limit=args.limit if pass_num == 1 else None,
+                log=log,
+            )
+            processed += p
+            skipped += s
+            errors = e
+            csv_new_rows.extend(rows)
+
+            if pass_num > 1:
+                log.info(
+                    f"Прохід {pass_num}: оброблено +{p}, пропущено {s}, помилок {e}"
                 )
-                if len(persons) > 3:
-                    names_preview += f" ... (+{len(persons) - 3})"
 
-                log.info(f"  → {len(persons)} осіб: {names_preview or '—'}")
-                processed += 1
-
-            except Exception as e:
-                log.error(f"  ПОМИЛКА: {e}")
-                if args.verbose:
-                    log.exception("Деталі помилки:")
-                errors += 1
-
-            finally:
-                if local_path:
-                    source.cleanup(entry)
-
-            if args.request_delay > 0:
-                time.sleep(args.request_delay)
+            if e == 0:
+                break
+            if pass_num == _MAX_INDEX_PASSES:
+                log.warning(
+                    f"Після {_MAX_INDEX_PASSES} проходів залишились помилки ({e}); "
+                    "перезапустіть індексатор пізніше або перевірте проблемні файли."
+                )
 
     log.info(
         f"\n{'='*50}\n"

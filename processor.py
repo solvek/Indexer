@@ -145,10 +145,17 @@ _log = logging.getLogger(__name__)
 
 # Повтори при тимчасових збоях мережі та при перевантаженні / лімітах API (503, 429…)
 _GEMINI_RETRY_MAX_ATTEMPTS = 8
+# 408 / мережа: короткі паузи (геом. прогресія від base)
 _GEMINI_RETRY_BASE_DELAY_S = 2.0
 _GEMINI_RETRY_MAX_DELAY_S = 90.0
+# 429: фіксована пауза перед наступною спробою
+_GEMINI_429_PAUSE_S = 3600.0
+# 500/502/503/504: геом. прогресія від 5 хв
+_GEMINI_SERVER_RETRY_BASE_DELAY_S = 300.0
+_GEMINI_SERVER_RETRY_MAX_DELAY_S = 7200.0
 # HTTP-коди, за яких має сенс повторити запит (не 4xx крім 408/429)
 _GEMINI_RETRY_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+_GEMINI_SERVER_BACKOFF_STATUSES = frozenset({500, 502, 503, 504})
 
 
 def _walk_exceptions(exc: BaseException):
@@ -311,16 +318,27 @@ def process_image(
             last_exc = e
             if attempt >= _GEMINI_RETRY_MAX_ATTEMPTS or not _is_retryable_gemini_error(e):
                 break
-            delay = min(
-                _GEMINI_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)),
-                _GEMINI_RETRY_MAX_DELAY_S,
-            )
-            ra = _retry_after_seconds(e)
-            if ra is not None:
-                delay = max(delay, min(ra, _GEMINI_RETRY_MAX_DELAY_S))
+            status = _http_status_from_exception(e)
+            if status == 429:
+                delay = _GEMINI_429_PAUSE_S
+            elif status in _GEMINI_SERVER_BACKOFF_STATUSES:
+                delay = min(
+                    _GEMINI_SERVER_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)),
+                    _GEMINI_SERVER_RETRY_MAX_DELAY_S,
+                )
+                ra = _retry_after_seconds(e)
+                if ra is not None:
+                    delay = max(delay, min(ra, _GEMINI_SERVER_RETRY_MAX_DELAY_S))
+            else:
+                delay = min(
+                    _GEMINI_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)),
+                    _GEMINI_RETRY_MAX_DELAY_S,
+                )
+                ra = _retry_after_seconds(e)
+                if ra is not None:
+                    delay = max(delay, min(ra, _GEMINI_RETRY_MAX_DELAY_S))
             # невеликий джиттер, щоб одночасні клієнти не били в API одним фронтом
             delay *= 1.0 + random.uniform(0.0, 0.12)
-            status = _http_status_from_exception(e)
             kind = (
                 f"HTTP {status}"
                 if status is not None
