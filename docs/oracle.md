@@ -106,7 +106,7 @@ nohup python indexer.py volodymyr_marriages "https://drive.google.com/drive/fold
 ### Закерзонці Волині
 
 ```bash
-python indexer.py zakerzonia "https://drive.google.com/drive/folders/1QiKWCUjOM1pxq08EmuNusO6Rs1-1uX1g?usp=drive_link" --extended-prompt zakerzonia --request-delay 150
+nohup python indexer.py zakerzonia "https://drive.google.com/drive/folders/1QiKWCUjOM1pxq08EmuNusO6Rs1-1uX1g?usp=drive_link" --extended-prompt zakerzonia --request-delay 150 </dev/null >>nohup.out 2>&1 &
 ```
 
 ## Вибірка даних
