@@ -9,6 +9,7 @@ root = Path(SPECPATH)
 
 _hidden = (
     collect_submodules("google.genai")
+    + collect_submodules("openai")
     + collect_submodules("google.auth")
     + collect_submodules("google.oauth2")
     + collect_submodules("google_auth_oauthlib")
