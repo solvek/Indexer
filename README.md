@@ -177,7 +177,12 @@ cd $HOME\Desktop\Indexer
 SELECT s.folder, s.number, p.surname, p.name, json_extract(p.meta, '$.father') AS father, json_extract(p.meta, '$.yob') AS yob,
       p.meta, s.file, s.meta
 FROM persons p JOIN scans s ON s.id = p.scan_id
-ORDER BY p.surname
+ORDER BY replace(replace(replace(replace(
+    upper(p.surname),
+    'Ґ', 'Г' || char(1)),
+    'Є', 'Е' || char(1)),
+    'І', 'И' || char(1)),
+    'Ї', 'И' || char(2))
 ```
 
 ```sql
