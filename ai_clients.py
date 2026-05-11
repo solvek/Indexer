@@ -1,58 +1,26 @@
 """
 Клієнти AI-провайдерів для розпізнавання зображень.
 
-Модуль ховає від processor.py відмінності SDK: Gemini та OpenAI мають
-різні формати запиту, але назовні повертають текст JSON-відповіді.
+Як source.py + source_local / source_drive: тут абстракція AIClient, реєстр провайдерів
+і фабрика; конкретні SDK — у ai_client_gemini.py та ai_client_openai.py.
 """
-import base64
 import errno
 import random
+import re
 import socket
 from abc import ABC, abstractmethod
 from typing import Optional
 
 
-_PROVIDER_ALIASES = {
-    "gemini": "gemini",
-    "google": "gemini",
-    "google-gemini": "gemini",
-    "openai": "openai",
-    "chatgpt": "openai",
-    "gpt": "openai",
-}
-
-_DEFAULT_MODELS = {
-    "gemini": "gemini-2.0-flash-lite",
-    "openai": "gpt-4o-mini",
-}
-
-_API_KEY_ENV = {
-    "gemini": "GEMINI_API_KEY",
-    "openai": "OPENAI_API_KEY",
-}
-
-
-def supported_providers() -> tuple[str, ...]:
-    return tuple(_DEFAULT_MODELS.keys())
-
-
-def normalize_provider(provider: str) -> str:
-    key = (provider or "").strip().lower()
-    normalized = _PROVIDER_ALIASES.get(key)
-    if normalized is None:
-        raise ValueError(
-            "Невідомий AI-провайдер "
-            f"{provider!r}. Підтримуються: {', '.join(supported_providers())}"
-        )
-    return normalized
-
-
-def default_model_for_provider(provider: str) -> str:
-    return _DEFAULT_MODELS[normalize_provider(provider)]
-
-
-def provider_api_key_env(provider: str) -> str:
-    return _API_KEY_ENV[normalize_provider(provider)]
+def api_error_detail_for_log(exc: BaseException) -> str:
+    """Короткий текст для логів: dict error з тіла відповіді API (OpenAI тощо), інакше str(exc)."""
+    for e in _walk_exceptions(exc):
+        body = getattr(e, "body", None)
+        if isinstance(body, dict):
+            inner = body.get("error")
+            if inner is not None:
+                return str(inner)
+    return str(exc)
 
 
 def _walk_exceptions(exc: BaseException):
@@ -224,122 +192,100 @@ class AIClient(ABC):
         return delay * (1.0 + random.uniform(0.0, 0.12))
 
 
-class GeminiClient(AIClient):
-    provider_name = "gemini"
+# --- реєстр провайдерів і фабрика (лінивий імпорт реалізацій) ---
 
-    def __init__(self, api_key: str):
-        from google import genai
-        from google.genai import errors as genai_errors
-        from google.genai import types
+_PROVIDER_ALIASES = {
+    "gemini": "gemini",
+    "google": "gemini",
+    "google-gemini": "gemini",
+    "openai": "openai",
+    "chatgpt": "openai",
+    "gpt": "openai",
+}
 
-        self._client = genai.Client(api_key=api_key)
-        self._errors = genai_errors
-        self._types = types
+_DEFAULT_MODELS = {
+    "gemini": "gemini-2.0-flash-lite",
+    "openai": "gpt-4o-mini",
+}
 
-    def generate_json_from_image(
-        self,
-        *,
-        model_name: str,
-        image_bytes: bytes,
-        mime_type: str,
-        prompt: str,
-        temperature: float,
-    ) -> str:
-        contents = [
-            self._types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-            prompt,
-        ]
-        config = self._types.GenerateContentConfig(
-            temperature=temperature,
-            response_mime_type="application/json",
+_API_KEY_ENV = {
+    "gemini": "GEMINI_API_KEY",
+    "openai": "OPENAI_API_KEY",
+}
+
+
+def supported_providers() -> tuple[str, ...]:
+    return tuple(_DEFAULT_MODELS.keys())
+
+
+def normalize_provider(provider: str) -> str:
+    key = (provider or "").strip().lower()
+    normalized = _PROVIDER_ALIASES.get(key)
+    if normalized is None:
+        raise ValueError(
+            "Невідомий AI-провайдер "
+            f"{provider!r}. Підтримуються: {', '.join(supported_providers())}"
         )
-        response = self._client.models.generate_content(
-            model=model_name,
-            contents=contents,
-            config=config,
+    return normalized
+
+
+def default_model_for_provider(provider: str) -> str:
+    return _DEFAULT_MODELS[normalize_provider(provider)]
+
+
+def provider_api_key_env(provider: str) -> str:
+    return _API_KEY_ENV[normalize_provider(provider)]
+
+
+_MODEL_OPENAI_LIKE = re.compile(r"^(gpt-|chatgpt|o\d)", re.IGNORECASE)
+_MODEL_GEMINI_LIKE = re.compile(r"^gemini", re.IGNORECASE)
+
+
+def infer_provider_from_model(model_name: str) -> Optional[str]:
+    """
+    Повертає 'openai' | 'gemini' за префіксом імені моделі, або None якщо не визначено.
+    Використовується, коли --provider у CLI не вказано.
+    """
+    m = (model_name or "").strip()
+    if not m:
+        return None
+    if _MODEL_GEMINI_LIKE.match(m):
+        return "gemini"
+    if _MODEL_OPENAI_LIKE.match(m):
+        return "openai"
+    return None
+
+
+def model_provider_mismatch_message(provider: str, model_name: str) -> Optional[str]:
+    """Якщо ім'я моделі очевидно не відповідає провайдеру — текст для parser.error."""
+    p = normalize_provider(provider)
+    m = (model_name or "").strip()
+    if not m:
+        return None
+    if p == "gemini" and _MODEL_OPENAI_LIKE.match(m):
+        return (
+            f"модель {model_name!r} схожа на OpenAI, а обрано провайдера gemini. "
+            "Приберіть --provider gemini або вкажіть --provider openai та OPENAI_API_KEY; "
+            "або змініть --model на модель Gemini (наприклад gemini-2.0-flash-lite)."
         )
-        return response.text or ""
-
-    def http_status_from_exception(self, exc: BaseException) -> Optional[int]:
-        for e in _walk_exceptions(exc):
-            if isinstance(e, self._errors.APIError):
-                code = getattr(e, "code", None)
-                if isinstance(code, int):
-                    return code
-        return super().http_status_from_exception(exc)
-
-
-class OpenAIClient(AIClient):
-    provider_name = "openai"
-
-    def __init__(self, api_key: str):
-        import openai as openai_module
-        from openai import OpenAI
-
-        self._client = OpenAI(api_key=api_key)
-        self._api_status_error = getattr(openai_module, "APIStatusError", None)
-        retryable_names = (
-            "APIConnectionError",
-            "APITimeoutError",
-            "RateLimitError",
-            "InternalServerError",
+    if p == "openai" and _MODEL_GEMINI_LIKE.match(m):
+        return (
+            f"модель {model_name!r} схожа на Gemini, а обрано провайдера openai. "
+            "Приберіть --provider openai або вкажіть --provider gemini та GEMINI_API_KEY; "
+            "або змініть --model на модель OpenAI (наприклад gpt-4o-mini)."
         )
-        self._retryable_errors = tuple(
-            cls
-            for cls in (getattr(openai_module, name, None) for name in retryable_names)
-            if cls is not None
-        )
-
-    def generate_json_from_image(
-        self,
-        *,
-        model_name: str,
-        image_bytes: bytes,
-        mime_type: str,
-        prompt: str,
-        temperature: float,
-    ) -> str:
-        image_b64 = base64.b64encode(image_bytes).decode("ascii")
-        data_url = f"data:{mime_type};base64,{image_b64}"
-        response = self._client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": data_url},
-                        },
-                    ],
-                }
-            ],
-            temperature=temperature,
-            response_format={"type": "json_object"},
-        )
-        return response.choices[0].message.content or ""
-
-    def http_status_from_exception(self, exc: BaseException) -> Optional[int]:
-        for e in _walk_exceptions(exc):
-            if self._api_status_error is not None and isinstance(e, self._api_status_error):
-                status_code = getattr(e, "status_code", None)
-                if isinstance(status_code, int):
-                    return status_code
-        return super().http_status_from_exception(exc)
-
-    def is_retryable_error(self, exc: BaseException) -> bool:
-        if self._retryable_errors and any(
-            isinstance(e, self._retryable_errors) for e in _walk_exceptions(exc)
-        ):
-            return True
-        return super().is_retryable_error(exc)
+    return None
 
 
 def create_ai_client(provider: str, api_key: str) -> AIClient:
+    """Фабрика: Gemini або OpenAI (лінивий імпорт SDK відповідної реалізації)."""
     normalized = normalize_provider(provider)
     if normalized == "gemini":
+        from ai_client_gemini import GeminiClient
+
         return GeminiClient(api_key)
     if normalized == "openai":
+        from ai_client_openai import OpenAIClient
+
         return OpenAIClient(api_key)
     raise ValueError(f"Непідтримуваний AI-провайдер: {provider}")

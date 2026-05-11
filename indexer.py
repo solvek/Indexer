@@ -23,7 +23,10 @@ load_dotenv()
 import db
 import processor
 from ai_clients import (
+    api_error_detail_for_log,
     default_model_for_provider,
+    infer_provider_from_model,
+    model_provider_mismatch_message,
     normalize_provider,
     provider_api_key_env,
     supported_providers,
@@ -152,6 +155,7 @@ def _run_index_pass(
 
         local_path = None
         try:
+            log.info("  Підготовка скану (локальний файл або завантаження з Drive, якщо потрібно)…")
             local_path = source.get_local_path(entry)
             number = processor.extract_number(entry.file)
             persons, scan_meta = processor.process_image(
@@ -174,7 +178,7 @@ def _run_index_pass(
             processed += 1
 
         except Exception as e:
-            log.error(f"  ПОМИЛКА: {e}")
+            log.error(f"  ПОМИЛКА: {api_error_detail_for_log(e)}")
             if args.verbose:
                 log.exception("Деталі помилки:")
             errors += 1
@@ -184,6 +188,7 @@ def _run_index_pass(
                 source.cleanup(entry)
 
         if args.request_delay > 0:
+            log.info(f"  Пауза {args.request_delay} с після запиту до моделі (--request-delay)…")
             time.sleep(args.request_delay)
 
     return processed, skipped, errors, csv_new_rows
@@ -275,16 +280,21 @@ def main():
     )
     parser.add_argument(
         "--provider",
-        default=default_provider,
+        default=argparse.SUPPRESS,
+        metavar="NAME",
         help=(
             "AI-провайдер: "
-            f"{', '.join(supported_providers())} "
-            f"(default: {default_provider})"
+            f"{', '.join(supported_providers())}. "
+            "Якщо не вказано — визначається за назвою моделі (--model або DEFAULT_MODEL у .env); "
+            f"якщо з моделі не зрозуміло — як AI_PROVIDER зараз ({default_provider!r})"
         ),
     )
     parser.add_argument(
         "--model", default=default_model,
-        help="Назва моделі провайдера (default: DEFAULT_MODEL або типова для --provider)",
+        help=(
+            "Назва моделі (default: DEFAULT_MODEL у .env або типова для обраного провайдера). "
+            "Префікс gpt-/o… → OpenAI, gemini… → Gemini, коли --provider не задано в CLI"
+        ),
     )
     parser.add_argument(
         "--temperature", type=float, default=0.1,
@@ -314,6 +324,23 @@ def main():
     )
 
     args = parser.parse_args()
+    provider_explicit = "provider" in args
+    provider_inferred_from_model = False
+    model_for_inference = (
+        str(args.model).strip()
+        if getattr(args, "model", None) is not None and str(args.model).strip()
+        else None
+    )
+    if not provider_explicit:
+        inferred = (
+            infer_provider_from_model(model_for_inference)
+            if model_for_inference
+            else None
+        )
+        args.provider = inferred if inferred is not None else default_provider
+        provider_inferred_from_model = inferred is not None
+    else:
+        args.provider = args.provider
     try:
         args.provider = normalize_provider(args.provider)
     except ValueError as e:
@@ -322,6 +349,9 @@ def main():
         args.model = default_model_for_provider(args.provider)
     else:
         args.model = str(args.model).strip()
+    mismatch = model_provider_mismatch_message(args.provider, args.model)
+    if mismatch:
+        parser.error(mismatch)
     if args.request_delay < 0:
         parser.error("--request-delay має бути >= 0")
 
@@ -339,7 +369,16 @@ def main():
     try:
         processor.init_client(args.provider, api_key)
     except ImportError as e:
-        log.error(f"Не вдалось завантажити SDK для провайдера {args.provider}: {e}")
+        pip_hint = (
+            "pip install openai"
+            if args.provider == "openai"
+            else "pip install google-genai"
+        )
+        log.error(
+            f"Не вдалось завантажити SDK для провайдера {args.provider}: {e}. "
+            f"Встановіть залежності у цьому ж середовищі Python: {pip_hint} "
+            "або pip install -r requirements.txt"
+        )
         sys.exit(1)
 
     drive_key = os.environ.get("GOOGLE_DRIVE_API_KEY", "").strip() or None
@@ -370,6 +409,8 @@ def main():
     log.info(f"Джерело: {args.source}")
     log.info(f"Фільтр файлів: {args.files or '(всі рекурсивно)'}")
     log.info(f"AI-провайдер: {args.provider}")
+    if provider_inferred_from_model:
+        log.info("Провайдер визначено автоматично за назвою моделі (--model або DEFAULT_MODEL).")
     log.info(f"Модель: {args.model}, температура: {args.temperature}")
     if args.request_delay > 0:
         log.info(f"Пауза між запитами: {args.request_delay} с")

@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from ai_clients import AIClient, create_ai_client
+from ai_clients import AIClient, api_error_detail_for_log, create_ai_client
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -170,6 +170,12 @@ def process_image(
 
     prompt = _build_prompt(extended_prompt)
 
+    _log.info(
+        "  Запит до моделі (%s, %s)…",
+        _client.provider_name,
+        model_name,
+    )
+
     last_exc: Optional[BaseException] = None
     for attempt in range(1, _client.retry_max_attempts + 1):
         try:
@@ -207,6 +213,10 @@ def process_image(
             time.sleep(delay)
 
     assert last_exc is not None
+    _log.error(
+        "Помилка моделі без успішного повтору: %s",
+        api_error_detail_for_log(last_exc),
+    )
     raise last_exc
 
 
