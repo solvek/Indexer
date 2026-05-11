@@ -15,52 +15,14 @@ _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 _BASE_PROMPT_FILE = _PROMPTS_DIR / "_base.txt"
 _prompt_template_cache: Optional[str] = None
 
-# Без --extended-prompt: один об'єкт scan + persons; з розширеним — зазвичай масив осіб (див. текст).
-_JSON_SHAPE_DEFAULT = """
-Формат відповіді (розширений промпт не заданий — працюєш у цьому режимі):
-
-Поверни один JSON-об'єкт (не масив на верхньому рівні):
-{
-  "scan": {
-    "document_year": <ціле число або null> — календарний рік документа (дата акту, запису, метрики тощо),
-                 якщо його видно в тексті; мінімально важливо витягнути рік, коли це можливо;
-    "document_date": <рядок або null> — дата документа лише **ISO 8601** (YYYY-MM-DD), якщо є в тексті точніше, ніж лише рік; інакше null і використовуй document_year
-  },
-  "persons": [
-    {
-      "surname": "...",
-      "name": "...",
-      "father": "... або null — ім'я батька з по батькові або контексту (див. правила нижче)",
-      "location": "... або null — місцевість, сучасна українська",
-      "yob": <ціле або null> — рік народження особи, лише якщо явно з тексту",
-      "birth_date": <рядок або null> — дата народження лише **ISO 8601** (YYYY-MM-DD), якщо зазначена повністю; якщо відомий лише рік — null тут і yob з роком
-    }
-  ]
-}
-
-Правила для полів людини (у масиві persons):
-  "surname"  — прізвище, сучасна українська (найважливіше!)
-  "name"     — ім'я, сучасна українська
-  "father"   — ім'я батька з по батькові або контексту; приклади: "Іванович" → "Іван", "Петрівна" → "Петро"; якщо невідомо — null
-
-Якщо рік або дату документа встановити неможливо — у scan став null. Не вигадуй дати.
-
-Приклад:
-{"scan": {"document_year": 1912, "document_date": "1912-08-14"}, "persons": [{"surname": "Коваленко", "name": "Іван", "father": "Петро", "yob": 1854, "birth_date": "1854-06-12", "location": "Київ"}]}
-"""
-
-_JSON_SHAPE_EXTENDED = """
-Формат відповіді (задано розширений промпт або додатковий контекст вище):
-
-Дотримуйся інструкцій з блоку «Додатковий контекст» / файлу розширеного промпта щодо набору полів і змісту.
-• Якщо там не сказано інакше — поверни JSON-масив об'єктів осіб; у кожного об'єкта щонайменше "surname" та "name", інші поля — як указано для типу документа.
-• Допустимо також повернути об'єкт { "scan": { ... }, "persons": [ ... ] }, якщо це прямо відповідає розширеному промпту.
-
-Приклад масиву (якщо об'єкт-обгортка не потрібен):
-[
-  {"surname": "Коваленко", "name": "Іван", "father": "Петро", "yob": 1854, "location": "Київ"}
-]
-"""
+# У prompts/_base.txt блок «дефолтний формат JSON» між маркерами; при розширеному промпті його прибираємо
+# (формат задає сам файл розширеного промпта).
+_DEFAULT_FORMAT_BEGIN = "<!--BEGIN_DEFAULT_FORMAT-->"
+_DEFAULT_FORMAT_END = "<!--END_DEFAULT_FORMAT-->"
+_DEFAULT_FORMAT_BLOCK_RE = re.compile(
+    re.escape(_DEFAULT_FORMAT_BEGIN) + r"\s*.*?\s*" + re.escape(_DEFAULT_FORMAT_END),
+    flags=re.DOTALL,
+)
 
 # Для --extended-prompt: якщо значення збігається з цим шаблоном, шукаємо файл
 # prompts/<значення>.txt (розширений промпт), інакше — довільний текст.
@@ -93,7 +55,7 @@ def extract_number(filename: str) -> Optional[int]:
 
 
 # ------------------------------------------------------------------ #
-#  Базовий промпт: prompts/_base.txt; розширений — опційно (див. _build_prompt)  #
+#  Базовий промпт: prompts/_base.txt (+ опційний блок prompts/<stem>.txt).  #
 # ------------------------------------------------------------------ #
 
 
@@ -114,8 +76,12 @@ def _build_prompt(extended_prompt: Optional[str]) -> str:
                     extra = f"\nДодатковий контекст: {raw}"
             else:
                 extra = f"\nДодатковий контекст: {raw}"
-    json_shape = _JSON_SHAPE_EXTENDED if _extended_prompt_active(extended_prompt) else _JSON_SHAPE_DEFAULT
-    return _load_prompt_template().format(extra=extra, json_shape=json_shape)
+    raw = _load_prompt_template().replace("{extra}", extra)
+    if _extended_prompt_active(extended_prompt):
+        raw = _DEFAULT_FORMAT_BLOCK_RE.sub("", raw)
+    else:
+        raw = raw.replace(_DEFAULT_FORMAT_BEGIN, "").replace(_DEFAULT_FORMAT_END, "")
+    return raw
 
 
 # ------------------------------------------------------------------ #
