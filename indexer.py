@@ -22,6 +22,12 @@ load_dotenv()
 
 import db
 import processor
+from ai_clients import (
+    default_model_for_provider,
+    normalize_provider,
+    provider_api_key_env,
+    supported_providers,
+)
 from source import create_source, normalize_files_filter
 
 
@@ -197,7 +203,8 @@ def _sqlite_db_path(s: str) -> Path:
 
 
 def main():
-    default_model = os.environ.get("DEFAULT_MODEL", "gemini-2.0-flash-lite")
+    default_provider = os.environ.get("AI_PROVIDER", "gemini").strip() or "gemini"
+    default_model = os.environ.get("DEFAULT_MODEL", "").strip() or None
 
     parser = argparse.ArgumentParser(
         prog="indexer",
@@ -267,8 +274,17 @@ def main():
         ),
     )
     parser.add_argument(
+        "--provider",
+        default=default_provider,
+        help=(
+            "AI-провайдер: "
+            f"{', '.join(supported_providers())} "
+            f"(default: {default_provider})"
+        ),
+    )
+    parser.add_argument(
         "--model", default=default_model,
-        help=f"Назва моделі Gemini (default: {default_model})",
+        help="Назва моделі провайдера (default: DEFAULT_MODEL або типова для --provider)",
     )
     parser.add_argument(
         "--temperature", type=float, default=0.1,
@@ -298,6 +314,14 @@ def main():
     )
 
     args = parser.parse_args()
+    try:
+        args.provider = normalize_provider(args.provider)
+    except ValueError as e:
+        parser.error(str(e))
+    if args.model is None or not str(args.model).strip():
+        args.model = default_model_for_provider(args.provider)
+    else:
+        args.model = str(args.model).strip()
     if args.request_delay < 0:
         parser.error("--request-delay має бути >= 0")
 
@@ -307,11 +331,16 @@ def main():
     log = logging.getLogger("indexer")
 
     # Ключі API
-    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
-    if not gemini_key:
-        log.error("GEMINI_API_KEY не задано у .env")
+    api_key_env = provider_api_key_env(args.provider)
+    api_key = os.environ.get(api_key_env, "").strip()
+    if not api_key:
+        log.error(f"{api_key_env} не задано у .env для AI-провайдера {args.provider}")
         sys.exit(1)
-    processor.init_client(gemini_key)
+    try:
+        processor.init_client(args.provider, api_key)
+    except ImportError as e:
+        log.error(f"Не вдалось завантажити SDK для провайдера {args.provider}: {e}")
+        sys.exit(1)
 
     drive_key = os.environ.get("GOOGLE_DRIVE_API_KEY", "").strip() or None
     drive_sa = os.environ.get("GOOGLE_DRIVE_SERVICE_ACCOUNT", "").strip() or None
@@ -340,6 +369,7 @@ def main():
 
     log.info(f"Джерело: {args.source}")
     log.info(f"Фільтр файлів: {args.files or '(всі рекурсивно)'}")
+    log.info(f"AI-провайдер: {args.provider}")
     log.info(f"Модель: {args.model}, температура: {args.temperature}")
     if args.request_delay > 0:
         log.info(f"Пауза між запитами: {args.request_delay} с")

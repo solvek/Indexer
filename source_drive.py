@@ -27,7 +27,7 @@ _DRIVE_LIST_FILE_KW: Dict[str, object] = {
     "supportsAllDrives": True,
     "includeItemsFromAllDrives": True,
 }
-# Коли в імені файла в Drive немає суфікса, MIME з API → суфікс тимчасового файла для Gemini
+# Коли в імені файла в Drive немає суфікса, MIME з API → суфікс тимчасового файла для AI-моделі
 _DRIVE_MIME_TO_TMP_SUFFIX: Dict[str, str] = {
     "image/jpeg": ".jpg",
     "image/jpg": ".jpg",

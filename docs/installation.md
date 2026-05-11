@@ -37,12 +37,14 @@ cp sample.env .env
 
 | Змінна | Де взяти |
 |---|---|
+| `AI_PROVIDER` | `gemini` (за замовчуванням) або `openai`; можна також перевизначити через `--provider` |
 | `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| `OPENAI_API_KEY` | [platform.openai.com/api-keys](https://platform.openai.com/api-keys); потрібен лише для `AI_PROVIDER=openai` / `--provider openai` |
 | `GOOGLE_DRIVE_API_KEY` | [console.cloud.google.com](https://console.cloud.google.com) → APIs & Services → Credentials → API key. Увімкніть Google Drive API. Для публічних папок. |
 | `GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS` | (опційно) Абсолютний шлях до JSON **Desktop** OAuth client, якщо API key у проєкті блокують методи `files.get` / `files.list` (403 *method … blocked*). Перший запуск відкриє вхід Google у браузері. |
 | `GOOGLE_DRIVE_OAUTH_TOKEN` | (опційно) Файл збереження access token, напр. `data/drive_oauth_token.json` (створюється автоматично; не комітайте). |
 | `GOOGLE_DRIVE_SERVICE_ACCOUNT` | (рекоменд. для сервера) Абсолютний шлях до JSON **service account** (ключ, без пароля). **Браузер не потрібен** — зручно на Oracle Cloud та ін. Див. розділ нижче. Якщо змінна задана, індексатор **не** використає `GOOGLE_DRIVE_OAUTH_CLIENT_SECRETS` / `GOOGLE_DRIVE_API_KEY` для Drive. |
-| `DEFAULT_MODEL` | Модель за замовчуванням, можна не міняти |
+| `DEFAULT_MODEL` | Модель за замовчуванням; якщо не задано, береться типова для `AI_PROVIDER` |
 
 ## Google Drive: Service account (сервер / Oracle Cloud, без браузера)
 

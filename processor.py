@@ -1,19 +1,14 @@
 """
-Обробка зображень через Gemini: витягування інформації про людей.
+Обробка зображень через AI-модель: витягування інформації про людей.
 """
-import errno
 import json
 import logging
-import random
 import re
-import socket
 import time
 from pathlib import Path
 from typing import Optional
 
-from google import genai
-from google.genai import errors as genai_errors
-from google.genai import types
+from ai_clients import AIClient, create_ai_client
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -139,138 +134,18 @@ _MIME_MAP = {
 }
 
 # Клієнт ініціалізується один раз через init_client()
-_client: Optional[genai.Client] = None
+_client: Optional[AIClient] = None
 
 _log = logging.getLogger(__name__)
 
-# Повтори при тимчасових збоях мережі та при перевантаженні / лімітах API (503, 429…)
-_GEMINI_RETRY_MAX_ATTEMPTS = 8
-# 408 / мережа: короткі паузи (геом. прогресія від base)
-_GEMINI_RETRY_BASE_DELAY_S = 2.0
-_GEMINI_RETRY_MAX_DELAY_S = 90.0
-# 429: фіксована пауза перед наступною спробою
-_GEMINI_429_PAUSE_S = 3600.0
-# 500/502/503/504: геом. прогресія від 5 хв
-_GEMINI_SERVER_RETRY_BASE_DELAY_S = 300.0
-_GEMINI_SERVER_RETRY_MAX_DELAY_S = 7200.0
-# HTTP-коди, за яких має сенс повторити запит (не 4xx крім 408/429)
-_GEMINI_RETRY_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
-_GEMINI_SERVER_BACKOFF_STATUSES = frozenset({500, 502, 503, 504})
 
-
-def _walk_exceptions(exc: BaseException):
-    """__cause__ / __context__ — ланцюг як у httpx → httpcore → gaierror."""
-    seen: set[int] = set()
-    stack = [exc]
-    while stack:
-        e = stack.pop()
-        if e is None:
-            continue
-        eid = id(e)
-        if eid in seen:
-            continue
-        seen.add(eid)
-        yield e
-        stack.append(getattr(e, "__cause__", None))
-        stack.append(getattr(e, "__context__", None))
-
-
-def _is_transient_transport_error(exc: BaseException) -> bool:
-    for e in _walk_exceptions(exc):
-        if isinstance(e, (TimeoutError, BrokenPipeError)):
-            return True
-        if isinstance(e, ConnectionError):
-            return True
-        if isinstance(e, socket.gaierror):
-            return True
-        if isinstance(e, OSError):
-            no = e.errno
-            eai_again = getattr(socket, "EAI_AGAIN", None)
-            if eai_again is not None and no == eai_again:
-                return True
-            if no in (
-                errno.ETIMEDOUT,
-                errno.ECONNRESET,
-                errno.EPIPE,
-                errno.ENETUNREACH,
-                errno.EHOSTUNREACH,
-            ):
-                return True
-        try:
-            import httpx
-        except ImportError:
-            pass
-        else:
-            if isinstance(
-                e,
-                (
-                    httpx.ConnectError,
-                    httpx.ReadTimeout,
-                    httpx.WriteTimeout,
-                    httpx.PoolTimeout,
-                ),
-            ):
-                return True
-        try:
-            import httpcore
-        except ImportError:
-            pass
-        else:
-            if isinstance(
-                e,
-                (
-                    httpcore.ConnectError,
-                    httpcore.ReadTimeout,
-                    httpcore.WriteTimeout,
-                    httpcore.PoolTimeout,
-                ),
-            ):
-                return True
-    return False
-
-
-def _http_status_from_exception(exc: BaseException) -> Optional[int]:
-    """Код відповіді API, якщо помилка з HTTP-шару або google.genai.errors.APIError."""
-    for e in _walk_exceptions(exc):
-        if isinstance(e, genai_errors.APIError):
-            code = getattr(e, "code", None)
-            if isinstance(code, int):
-                return code
-        try:
-            import httpx
-        except ImportError:
-            pass
-        else:
-            if isinstance(e, httpx.HTTPStatusError):
-                return e.response.status_code
-    return None
-
-
-def _retry_after_seconds(exc: BaseException) -> Optional[float]:
-    """Заголовок Retry-After (секунди), якщо є."""
-    for e in _walk_exceptions(exc):
-        if isinstance(e, genai_errors.APIError):
-            resp = getattr(e, "response", None)
-            if resp is not None and hasattr(resp, "headers"):
-                ra = resp.headers.get("Retry-After") or resp.headers.get("retry-after")
-                if ra is not None:
-                    try:
-                        return float(ra)
-                    except ValueError:
-                        pass
-    return None
-
-
-def _is_retryable_gemini_error(exc: BaseException) -> bool:
-    if _is_transient_transport_error(exc):
-        return True
-    status = _http_status_from_exception(exc)
-    return status is not None and status in _GEMINI_RETRY_HTTP_STATUSES
-
-
-def init_client(api_key: str):
+def init_client(provider: str, api_key: Optional[str] = None):
+    """Ініціалізує AI-клієнт. Для старого виклику init_client(key) лишається Gemini."""
     global _client
-    _client = genai.Client(api_key=api_key)
+    if api_key is None:
+        api_key = provider
+        provider = "gemini"
+    _client = create_ai_client(provider, api_key)
 
 
 def process_image(
@@ -280,12 +155,12 @@ def process_image(
     extended_prompt: Optional[str],
 ) -> tuple:
     """
-    Відправляє зображення в Gemini. Повертає (persons, scan_meta):
+    Відправляє зображення в AI-модель. Повертає (persons, scan_meta):
     persons — список осіб з name, surname, meta (усі інші поля з JSON особи);
     scan_meta — dict для scans.meta або None (дата документа в режимі без розширеного промпта).
     """
     if _client is None:
-        raise RuntimeError("Gemini клієнт не ініціалізовано. Викличте init_client() спочатку.")
+        raise RuntimeError("AI-клієнт не ініціалізовано. Викличте init_client() спочатку.")
 
     ext = Path(local_path).suffix.lower()
     mime_type = _MIME_MAP.get(ext, "image/jpeg")
@@ -293,62 +168,39 @@ def process_image(
     with open(local_path, "rb") as f:
         image_bytes = f.read()
 
-    contents = [
-        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-        _build_prompt(extended_prompt),
-    ]
-    config = types.GenerateContentConfig(
-        temperature=temperature,
-        response_mime_type="application/json",
-    )
+    prompt = _build_prompt(extended_prompt)
 
     last_exc: Optional[BaseException] = None
-    for attempt in range(1, _GEMINI_RETRY_MAX_ATTEMPTS + 1):
+    for attempt in range(1, _client.retry_max_attempts + 1):
         try:
-            response = _client.models.generate_content(
-                model=model_name,
-                contents=contents,
-                config=config,
+            response_text = _client.generate_json_from_image(
+                model_name=model_name,
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                prompt=prompt,
+                temperature=temperature,
             )
             return _parse_response(
-                response.text,
+                response_text,
                 extended_used=_extended_prompt_active(extended_prompt),
             )
         except Exception as e:
             last_exc = e
-            if attempt >= _GEMINI_RETRY_MAX_ATTEMPTS or not _is_retryable_gemini_error(e):
+            if attempt >= _client.retry_max_attempts or not _client.is_retryable_error(e):
                 break
-            status = _http_status_from_exception(e)
-            if status == 429:
-                delay = _GEMINI_429_PAUSE_S
-            elif status in _GEMINI_SERVER_BACKOFF_STATUSES:
-                delay = min(
-                    _GEMINI_SERVER_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)),
-                    _GEMINI_SERVER_RETRY_MAX_DELAY_S,
-                )
-                ra = _retry_after_seconds(e)
-                if ra is not None:
-                    delay = max(delay, min(ra, _GEMINI_SERVER_RETRY_MAX_DELAY_S))
-            else:
-                delay = min(
-                    _GEMINI_RETRY_BASE_DELAY_S * (2 ** (attempt - 1)),
-                    _GEMINI_RETRY_MAX_DELAY_S,
-                )
-                ra = _retry_after_seconds(e)
-                if ra is not None:
-                    delay = max(delay, min(ra, _GEMINI_RETRY_MAX_DELAY_S))
-            # невеликий джиттер, щоб одночасні клієнти не били в API одним фронтом
-            delay *= 1.0 + random.uniform(0.0, 0.12)
+            status = _client.http_status_from_exception(e)
+            delay = _client.retry_delay_seconds(e, attempt)
             kind = (
                 f"HTTP {status}"
                 if status is not None
                 else "мережа"
             )
             _log.warning(
-                "Тимчасова помилка Gemini (%s, спроба %s/%s): %s — повтор через %.1f с",
+                "Тимчасова помилка %s (%s, спроба %s/%s): %s — повтор через %.1f с",
+                _client.provider_name,
                 kind,
                 attempt,
-                _GEMINI_RETRY_MAX_ATTEMPTS,
+                _client.retry_max_attempts,
                 e,
                 delay,
             )

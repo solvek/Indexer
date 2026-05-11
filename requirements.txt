@@ -1,4 +1,5 @@
 google-genai>=0.8.0
+openai>=2.36.0
 google-api-python-client>=2.120.0
 google-auth-httplib2>=0.2.0
 google-auth-oauthlib>=1.2.0
