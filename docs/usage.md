@@ -15,7 +15,7 @@ python indexer.py DBNAME SOURCE [опції]
 python indexer.py lutsk_marriages 'https://drive.google.com/drive/folders/1IC43A3HaSn-FluEl88PFb9YOSYuYdRVf?usp=drive_link' --limit 20 --extended-prompt volyn_darts_marriages
 
 # Вивантаження в Google Drive
-python indexer.py lutskyi_rayon_marriages /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --extended-prompt volyn_darts_marriages --model gemini-3-flash-preview
+python indexer.py lutskyi_rayon_marriages /home/solvek/Projects/VolynRagz/scans/122484190 --limit 20 --extended-prompt volyn_darts_marriages --model gemini-3.1-flash-lite
 
 # OpenAI/ChatGPT-модель замість Gemini
 python indexer.py volyn /mnt/scans --provider openai --model gpt-4o-mini

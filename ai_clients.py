@@ -204,7 +204,7 @@ _PROVIDER_ALIASES = {
 }
 
 _DEFAULT_MODELS = {
-    "gemini": "gemini-2.0-flash-lite",
+    "gemini": "gemini-3.1-flash-lite",
     "openai": "gpt-4o-mini",
 }
 
@@ -266,7 +266,7 @@ def model_provider_mismatch_message(provider: str, model_name: str) -> Optional[
         return (
             f"модель {model_name!r} схожа на OpenAI, а обрано провайдера gemini. "
             "Приберіть --provider gemini або вкажіть --provider openai та OPENAI_API_KEY; "
-            "або змініть --model на модель Gemini (наприклад gemini-2.0-flash-lite)."
+            "або змініть --model на модель Gemini (наприклад gemini-3.1-flash-lite)."
         )
     if p == "openai" and _MODEL_GEMINI_LIKE.match(m):
         return (
