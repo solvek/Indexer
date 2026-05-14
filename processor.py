@@ -252,10 +252,13 @@ def _parse_response(text: str, *, extended_used: bool) -> tuple:
     for item in raw_list:
         if not isinstance(item, dict):
             continue
+        surname = _clean_surname(item.get("surname"))
+        if surname is None:
+            continue
         meta = _person_meta_from_item(item)
         persons.append({
             "name": _clean_str(item.get("name")),
-            "surname": _clean_str(item.get("surname")),
+            "surname": surname,
             "meta": meta if meta else None,
         })
     return persons, scan_meta
@@ -302,6 +305,13 @@ def _clean_str(val) -> Optional[str]:
         return None
     s = str(val).strip()
     return s if s else None
+
+
+def _clean_surname(val) -> Optional[str]:
+    s = _clean_str(val)
+    if s is None or s.casefold() == "null":
+        return None
+    return s
 
 
 def _clean_int(val) -> Optional[int]:

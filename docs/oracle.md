@@ -137,3 +137,7 @@ ORDER BY replace(replace(replace(replace(
 ```bash
 nohup python indexer.py lutsk_births "https://drive.google.com/drive/folders/1GgpSb00oPB51iA64T-R9kAQErspjADqT?usp=drive_link" --extended-prompt volyn_darts_births --request-delay 150 </dev/null >>nohup.out 2>&1 &
 ```
+
+```bash
+nohup python indexer.py volodymyr_raion_births "https://drive.google.com/drive/folders/1ze-EG4xc06ogWMDnsJzQW8bnUK_3-u2b?usp=drive_link" --extended-prompt volyn_darts_births --request-delay 150 </dev/null >>nohup.out 2>&1 &
+```
